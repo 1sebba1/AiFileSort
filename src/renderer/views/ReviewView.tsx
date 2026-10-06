@@ -19,13 +19,13 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
     });
   }
 
-  function setAllInCluster(clusterId: number, status: FileSuggestion['status']): void {
+  async function setAllInCluster(clusterId: number, status: FileSuggestion['status']): Promise<void> {
     const cluster = suggestions.filter((s) => s.clusterId === clusterId);
-    let updated = [...suggestions];
-    cluster.forEach((s) => {
-      updated = updated.map((u) => u.filePath === s.filePath ? { ...u, status } : u);
-      invoke(IpcChannels.SUGGESTION_SET_STATUS, { filePath: s.filePath, status });
-    });
+    let updated: FileSuggestion[] = suggestions;
+    for (const s of cluster) {
+      const result = await invoke(IpcChannels.SUGGESTION_SET_STATUS, { filePath: s.filePath, status });
+      updated = result as FileSuggestion[];
+    }
     onSuggestionsChange(updated);
   }
 
@@ -61,8 +61,8 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
           confidence={files[0].confidence}
           files={files}
           onChange={setStatus}
-          onApproveAll={() => setAllInCluster(clusterId, 'approved')}
-          onRejectAll={() => setAllInCluster(clusterId, 'rejected')}
+          onApproveAll={() => { void setAllInCluster(clusterId, 'approved'); }}
+          onRejectAll={() => { void setAllInCluster(clusterId, 'rejected'); }}
         />
       ))}
     </div>
