@@ -51,4 +51,15 @@ describe('executeApproved', () => {
     expect(callOrder[0]).toBe('writeFile');
     expect(callOrder).toContain('rename');
   });
+
+  it('falls back to copy+delete on cross-drive (EXDEV) error', async () => {
+    mockFsp.rename = jest.fn().mockRejectedValue(Object.assign(new Error('EXDEV'), { code: 'EXDEV' }));
+    mockFsp.cp = jest.fn().mockResolvedValue(undefined);
+    mockFsp.unlink = jest.fn().mockResolvedValue(undefined);
+    const result = await executeApproved([approved], '/root', '/root/.undo.json');
+    expect(mockFsp.cp).toHaveBeenCalledTimes(1);
+    expect(mockFsp.unlink).toHaveBeenCalledTimes(1);
+    expect(result.moved).toHaveLength(1);
+    expect(result.skipped).toHaveLength(0);
+  });
 });

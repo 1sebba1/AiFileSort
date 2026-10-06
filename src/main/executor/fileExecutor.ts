@@ -2,6 +2,19 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { FileSuggestion, UndoManifest } from '@shared/types';
 
+async function moveFile(from: string, to: string): Promise<void> {
+  try {
+    await fsp.rename(from, to);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
+      await fsp.cp(from, to);
+      await fsp.unlink(from);
+    } else {
+      throw err;
+    }
+  }
+}
+
 export async function executeApproved(
   suggestions: FileSuggestion[],
   rootPath: string,
@@ -25,7 +38,7 @@ export async function executeApproved(
   for (const entry of manifest.moves) {
     try {
       await fsp.mkdir(path.dirname(entry.to), { recursive: true });
-      await fsp.rename(entry.from, entry.to);
+      await moveFile(entry.from, entry.to);
       entry.completed = true;
       moved.push(entry.from);
     } catch {

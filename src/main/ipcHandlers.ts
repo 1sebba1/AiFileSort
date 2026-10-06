@@ -1,6 +1,7 @@
 import { ipcMain, dialog } from 'electron';
 import path from 'path';
 import os from 'os';
+import fsp from 'fs/promises';
 import { IpcChannels } from '@shared/types';
 import { OllamaClient } from './ollama/ollamaClient';
 import { scanDirectory } from './scanner/fileScanner';
@@ -59,9 +60,13 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
     // Phase: reasoning
     const fileMap = new Map<string, FileMeta>(files.map((f) => [f.absolutePath, f]));
-    const topLevelFolders = [...new Set(
-      files.map((f) => f.absolutePath.replace(rootPath, '').split(/[/\\]/)[1]).filter(Boolean)
-    )];
+    let topLevelFolders: string[] = [];
+    try {
+      const rootEntries = await fsp.readdir(rootPath, { withFileTypes: true });
+      topLevelFolders = rootEntries.filter((e) => e.isDirectory()).map((e) => e.name);
+    } catch {
+      topLevelFolders = [];
+    }
     win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'reasoning', current: 0, total: assignments.length });
     const suggestions = await reasonClusters(assignments, fileMap, topLevelFolders, ollamaClient, chatModel, (done, total) => {
       win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'reasoning', current: done, total });
