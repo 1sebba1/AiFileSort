@@ -1,0 +1,14 @@
+appId: com.aifilesort.app
+productName: AiFileSort
+directories:
+  output: release
+files:
+  - dist/**/*
+  - index.html
+  - package.json
+win:
+  target: nsis
+mac:
+  target: dmg
+linux:
+  target: AppImage
