@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from 'electron';
 import path from 'path';
+import { registerIpcHandlers } from './ipcHandlers';
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -10,6 +11,7 @@ function createWindow(): void {
       contextIsolation: true,
     },
   });
+  registerIpcHandlers(win);
   win.loadFile('index.html');
 }
 
