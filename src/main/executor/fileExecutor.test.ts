@@ -44,10 +44,11 @@ describe('executeApproved', () => {
   });
 
   it('writes the undo manifest before moving files', async () => {
+    const callOrder: string[] = [];
+    mockFsp.writeFile = jest.fn().mockImplementation(async () => { callOrder.push('writeFile'); });
+    mockFsp.rename = jest.fn().mockImplementation(async () => { callOrder.push('rename'); });
     await executeApproved([approved], '/root', '/root/.undo.json');
-    // @ts-expect-error - unusual assertion pattern per brief
-    expect(mockFsp.writeFile).toHaveBeenCalledBefore
-      ? expect(mockFsp.writeFile).toHaveBeenCalled()
-      : expect(mockFsp.writeFile).toHaveBeenCalled();
+    expect(callOrder[0]).toBe('writeFile');
+    expect(callOrder).toContain('rename');
   });
 });
