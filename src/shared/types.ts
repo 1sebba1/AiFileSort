@@ -26,6 +26,14 @@ export interface FileSuggestion {
   rationale: string;
   confidence: number; // 0–1
   status: 'pending' | 'approved' | 'rejected';
+  isAtomicFolder?: boolean; // true = move entire directory as a unit
+}
+
+export interface AtomicFolder {
+  absolutePath: string;
+  name: string;
+  fileCount: number;
+  hasExecutable: boolean;
 }
 
 export interface ClusterGroup {
@@ -59,7 +67,7 @@ export interface ExecuteProgress {
 
 export interface UndoManifest {
   timestamp: string;
-  moves: Array<{ from: string; to: string; completed: boolean }>;
+  moves: Array<{ from: string; to: string; completed: boolean; isFolder?: boolean }>;
 }
 
 export const IpcChannels = {
@@ -76,4 +84,5 @@ export const IpcChannels = {
   UNDO_START: 'undo:start',
   UNDO_COMPLETE: 'undo:complete',
   RECLUSTER: 'recluster',
+  SELECT_FOLDER: 'folder:select',
 } as const;

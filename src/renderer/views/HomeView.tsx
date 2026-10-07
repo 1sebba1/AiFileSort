@@ -21,19 +21,33 @@ export default function HomeView({ config, onConfigChange, onStart }: Props): Re
 
   const ready = health?.healthy && health.embedModel && health.chatModel;
 
+  async function browseFolder() {
+    const picked = await invoke(IpcChannels.SELECT_FOLDER) as string | null;
+    if (picked) onConfigChange({ ...config, rootPath: picked });
+  }
+
   return (
     <div style={{ padding: 32, maxWidth: 600 }}>
       <h1>AiFileSort</h1>
-      <label>
+      <div>
         <span>Folder to sort:</span>
-        <input
-          type="text"
-          value={config.rootPath}
-          onChange={(e) => onConfigChange({ ...config, rootPath: e.target.value })}
-          style={{ display: 'block', width: '100%', marginTop: 4, padding: 8 }}
-          placeholder="/path/to/folder"
-        />
-      </label>
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <input
+            type="text"
+            value={config.rootPath}
+            readOnly
+            onClick={browseFolder}
+            style={{ flex: 1, padding: 8, cursor: 'pointer', background: '#f9fafb', border: '1px solid #d1d5db', borderRadius: 4 }}
+            placeholder="Click Browse to select a folder…"
+          />
+          <button
+            onClick={browseFolder}
+            style={{ padding: '8px 16px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+          >
+            Browse
+          </button>
+        </div>
+      </div>
       <label style={{ display: 'block', marginTop: 16 }}>
         <span>Chat model (Ollama):</span>
         <input

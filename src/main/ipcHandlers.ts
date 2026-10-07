@@ -4,11 +4,11 @@ import os from 'os';
 import fsp from 'fs/promises';
 import { IpcChannels } from '@shared/types';
 import { OllamaClient } from './ollama/ollamaClient';
-import { scanDirectory } from './scanner/fileScanner';
+import { scanDirectory, detectAtomicFolders } from './scanner/fileScanner';
 import { extractContent } from './extractor/contentExtractor';
 import { embedFiles } from './embedding/embeddingEngine';
 import { clusterFiles } from './clustering/clusteringEngine';
-import { reasonClusters } from './reasoning/llmReasoner';
+import { reasonClusters, categorizeAtomicFolders } from './reasoning/llmReasoner';
 import { executeApproved, undoManifest } from './executor/fileExecutor';
 import { FileMeta, FileSuggestion } from '@shared/types';
 import { BrowserWindow } from 'electron';
@@ -19,6 +19,14 @@ let currentSuggestions: FileSuggestion[] = [];
 const MANIFEST_PATH = path.join(os.tmpdir(), 'aifilesort-undo.json');
 
 export function registerIpcHandlers(win: BrowserWindow): void {
+  ipcMain.handle(IpcChannels.SELECT_FOLDER, async () => {
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
+      title: 'Select folder to sort',
+    });
+    return result.canceled ? null : result.filePaths[0];
+  });
+
   ipcMain.handle(IpcChannels.OLLAMA_HEALTH, async (_, { chatModel }: { chatModel: string }) => {
     const healthy = await ollamaClient.checkHealth();
     if (!healthy) return { healthy: false, embedModel: false, chatModel: false };
@@ -31,11 +39,13 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     scanAbortController = new AbortController();
     const signal = scanAbortController.signal;
 
-    // Phase: scanning
+    // Phase: scanning — detect atomic folders first, then walk remaining files
     win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'scanning', current: 0, total: 0 });
+    const atomicFolders = await detectAtomicFolders(rootPath);
+    const atomicPaths = new Set(atomicFolders.map((f) => f.absolutePath));
     const files = await scanDirectory(rootPath, (count) => {
       win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'scanning', current: count, total: count });
-    });
+    }, atomicPaths);
 
     if (signal.aborted) return;
 
@@ -63,15 +73,24 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     let topLevelFolders: string[] = [];
     try {
       const rootEntries = await fsp.readdir(rootPath, { withFileTypes: true });
-      topLevelFolders = rootEntries.filter((e) => e.isDirectory()).map((e) => e.name);
+      const SKIP = new Set(['.git', 'node_modules', '.svn', '.hg']);
+      topLevelFolders = rootEntries
+        .filter((e) => e.isDirectory() && !SKIP.has(e.name))
+        .map((e) => e.name);
     } catch {
       topLevelFolders = [];
     }
     win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'reasoning', current: 0, total: assignments.length });
-    const suggestions = await reasonClusters(assignments, fileMap, topLevelFolders, ollamaClient, chatModel, (done, total) => {
+    const fileSuggestions = await reasonClusters(assignments, fileMap, topLevelFolders, ollamaClient, chatModel, (done, total) => {
       win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'reasoning', current: done, total });
     });
 
+    // Categorize atomic folders (shown separately — not destructured)
+    const atomicSuggestions = atomicFolders.length > 0
+      ? await categorizeAtomicFolders(atomicFolders, topLevelFolders, ollamaClient, chatModel, () => {})
+      : [];
+
+    const suggestions = [...atomicSuggestions, ...fileSuggestions];
     currentSuggestions = suggestions;
     win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'done', current: suggestions.length, total: suggestions.length });
     win.webContents.send(IpcChannels.SUGGESTIONS_UPDATE, suggestions);

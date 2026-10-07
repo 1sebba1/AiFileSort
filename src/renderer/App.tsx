@@ -15,7 +15,7 @@ export interface AppConfig {
 
 export default function App(): React.JSX.Element {
   const [state, setState] = useState<AppState>('home');
-  const [config, setConfig] = useState<AppConfig>({ rootPath: '', chatModel: 'llama3.2:3b' });
+  const [config, setConfig] = useState<AppConfig>({ rootPath: '', chatModel: 'llama3.1:8b' });
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [suggestions, setSuggestions] = useState<FileSuggestion[]>([]);
   const [executeResult, setExecuteResult] = useState<{ moved: string[]; skipped: string[] } | null>(null);

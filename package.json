@@ -2,13 +2,14 @@
   "name": "aifilesort",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/main/index.js",
   "directories": {
     "doc": "docs"
   },
   "scripts": {
     "start": "concurrently \"tsc -p tsconfig.main.json --watch\" \"electron .\"",
-    "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.renderer.json",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "test": "jest",
     "test:e2e": "playwright test"
   },
@@ -26,6 +27,7 @@
     "concurrently": "^9.2.4",
     "electron": "^41.7.1",
     "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "jest": "^30.5.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
