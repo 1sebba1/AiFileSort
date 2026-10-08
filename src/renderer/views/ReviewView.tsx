@@ -2,6 +2,7 @@ import React from 'react';
 import { FileSuggestion } from '@shared/types';
 import { useIpc } from '../hooks/useIpc';
 import ClusterGroup from '../components/ClusterGroup';
+import { looseClusterMembers } from './reviewSelection';
 
 interface Props {
   suggestions: FileSuggestion[];
@@ -37,7 +38,7 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
   }
 
   async function setAllInCluster(clusterId: number, status: FileSuggestion['status']): Promise<void> {
-    const cluster = suggestions.filter((s) => s.clusterId === clusterId);
+    const cluster = looseClusterMembers(suggestions, clusterId);
     let updated: FileSuggestion[] = suggestions;
     for (const s of cluster) {
       const result = await invoke(IpcChannels.SUGGESTION_SET_STATUS, { filePath: s.filePath, status });
