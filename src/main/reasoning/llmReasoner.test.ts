@@ -195,6 +195,13 @@ describe('sanitizeFolder', () => {
   it('reuses the casing of an existing folder', () => {
     expect(sanitizeFolder('documents/work', ['Documents', 'Games'])).toBe('Documents/work');
   });
+
+  it('adopts the casing of the longest existing nested folder prefix', () => {
+    expect(sanitizeFolder('finance/bank', ['Finance', 'Finance/Bank'])).toBe('Finance/Bank');
+    expect(sanitizeFolder('FINANCE/BANK/statements', ['Finance', 'Finance/Bank'])).toBe('Finance/Bank/statements');
+    expect(sanitizeFolder('finance/bank', ['Finance/Bank'])).toBe('Finance/Bank');
+    expect(sanitizeFolder('finance/cards', ['Finance', 'Finance/Bank'])).toBe('Finance/cards');
+  });
 });
 
 describe('clampConfidence', () => {

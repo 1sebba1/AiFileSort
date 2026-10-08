@@ -208,8 +208,12 @@ export function sanitizeFolder(raw: unknown, existingFolders: string[] = []): st
     .slice(0, MAX_FOLDER_DEPTH);
   if (segments.length === 0) return FALLBACK.suggestedFolder;
 
-  const existing = existingFolders.find((f) => f.toLowerCase() === segments[0].toLowerCase());
-  if (existing) segments[0] = existing;
+  // Longest existing folder that is a case-insensitive prefix (whole segments) of the answer
+  for (let n = segments.length; n > 0; n--) {
+    const prefix = segments.slice(0, n).join('/').toLowerCase();
+    const existing = existingFolders.find((f) => f.toLowerCase() === prefix);
+    if (existing) return [existing, ...segments.slice(n)].join('/');
+  }
   return segments.join('/');
 }
 
