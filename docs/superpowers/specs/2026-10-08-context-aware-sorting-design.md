@@ -55,7 +55,7 @@ Progress phases: `scanning → extracting → embedding → profiling → reason
 
 A directory is **atomic** (moved as one unit, never descended into) if any of:
 
-- **Installed app/game:** within 2 levels, some single directory contains an executable (`.exe`) **alongside** application support files (`.dll .pak .asar .so .dylib`). Installers on their own (`setup.exe`, `.msi`) do not count — a folder like `Software/Installers` full of setup files is ordinary organisation.
+- **Installed app/game:** the directory itself — or a binaries subfolder reached only through folders named `bin`, `x64`, `x86`, `win64`, `win32`, `binaries`, `app`, `program`, at most 2 levels down — contains an executable (`.exe`) **alongside** application support files (`.dll .pak .asar .so .dylib`). So `Hades/x64/Hades.exe` makes `Hades` atomic, but an organising parent like `Games/` (whose child `Hades/` holds the binaries) is not. Installers on their own (`setup.exe`, `.msi`) do not count — a folder like `Software/Installers` full of setup files is ordinary organisation.
 - **macOS bundle:** the directory name ends in `.app`.
 - **Code project:** contains `.git`, `package.json`, or `*.sln` at its top level.
 
