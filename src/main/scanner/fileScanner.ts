@@ -8,6 +8,10 @@ const SKIP_DIRS = new Set([
   '.Trash', '__pycache__', '.cache',
 ]);
 
+// OS-managed metadata files (lower-cased). They sit in every folder, are natural embedding
+// outliers, and moving desktop.ini breaks the folder's customisation — never scan them.
+const SKIP_FILES = new Set(['desktop.ini', 'thumbs.db', 'ehthumbs.db', 'ehthumbs_vista.db', 'icon\r']);
+
 // An .exe only marks an installed app when it sits next to the app's own support files;
 // a lone setup.exe or .msi is just an installer someone filed
 const APP_SUPPORT_EXTS = ['.dll', '.pak', '.asar', '.so', '.dylib'];
@@ -112,6 +116,7 @@ export async function scanDirectory(
         if (childFolder.split('/').length <= MAX_LISTED_FOLDER_DEPTH) folders.push(childFolder);
         await walk(fullPath, childFolder);
       } else if (entry.isFile()) {
+        if (SKIP_FILES.has(entry.name.toLowerCase())) continue;
         try {
           const stat = await fsp.stat(fullPath);
           const ext = path.extname(entry.name).toLowerCase();

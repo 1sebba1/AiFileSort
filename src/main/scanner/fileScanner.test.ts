@@ -45,6 +45,17 @@ describe('scanDirectory', () => {
     expect(rels(files)).toEqual(['keep.txt']);
   });
 
+  it('skips Windows/macOS system files case-insensitively', async () => {
+    await makeTree([
+      'desktop.ini', 'Photos/Desktop.ini', 'Photos/Thumbs.db', 'Photos/ehthumbs.db',
+      'Videos/EHTHUMBS_VISTA.DB', 'Photos/keep.jpg',
+      // macOS custom-icon file; Windows cannot create a name containing a carriage return
+      ...(process.platform === 'win32' ? [] : ['Photos/Icon\r']),
+    ]);
+    const { files } = await scanDirectory(root, () => {});
+    expect(rels(files)).toEqual(['Photos/keep.jpg']);
+  });
+
   it('reports progress for each file', async () => {
     await makeTree(['a.txt', 'b.txt']);
     const counts: number[] = [];
