@@ -1,4 +1,4 @@
-import { ipcMain, dialog } from 'electron';
+import { ipcMain, dialog, shell } from 'electron';
 import path from 'path';
 import os from 'os';
 import { IpcChannels, EMBED_MODEL, OllamaHealth, PullProgress } from '@shared/types';
@@ -6,6 +6,7 @@ import { OllamaClient } from './ollama/ollamaClient';
 import { executeApproved, undoManifest } from './executor/fileExecutor';
 import { FileSuggestion } from '@shared/types';
 import { runPipeline } from './pipeline';
+import { findSuggestion, trashSuggestion } from './fileActions';
 import { BrowserWindow } from 'electron';
 
 const ollamaClient = new OllamaClient();
@@ -76,6 +77,34 @@ export function registerIpcHandlers(win: BrowserWindow): void {
   ipcMain.handle(IpcChannels.SUGGESTION_SET_STATUS, (_, { filePath, status }: { filePath: string; status: FileSuggestion['status'] }) => {
     const s = currentSuggestions.find((s) => s.filePath === filePath);
     if (s) s.status = status;
+    return currentSuggestions;
+  });
+
+  ipcMain.handle(IpcChannels.FILE_REVEAL, (_, { filePath }: { filePath: string }) => {
+    if (findSuggestion(currentSuggestions, filePath)) shell.showItemInFolder(filePath);
+  });
+
+  ipcMain.handle(IpcChannels.FILE_TRASH, async (_, { filePath }: { filePath: string }) => {
+    const result = await trashSuggestion(currentSuggestions, filePath, {
+      confirm: async (s) => {
+        const name = path.basename(s.filePath);
+        const { response } = await dialog.showMessageBox(win, {
+          type: 'warning',
+          buttons: ['Move to Recycle Bin', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          title: 'Delete',
+          message: `Move "${name}" to the Recycle Bin?`,
+          detail: s.kind === 'folder' ? 'The folder and everything inside it will be moved.' : s.filePath,
+        });
+        return response === 0;
+      },
+      trash: (p) => shell.trashItem(p),
+    });
+    if (result.status === 'failed') {
+      dialog.showErrorBox('Could not delete', `${path.basename(filePath)}: ${result.error}`);
+    }
+    currentSuggestions = result.suggestions;
     return currentSuggestions;
   });
 

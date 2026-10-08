@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { FileSuggestion } from '@shared/types';
 import FileSuggestionRow from './FileSuggestionRow';
+import { FileActions } from './FileActionButtons';
 
-interface Props {
+interface Props extends FileActions {
   destination: string;
   rationale: string;
   confidence: number;
@@ -12,7 +13,7 @@ interface Props {
   onRejectAll: () => void;
 }
 
-export default function ClusterGroup({ destination, rationale, confidence, files, onChange, onApproveAll, onRejectAll }: Props): React.JSX.Element {
+export default function ClusterGroup({ destination, rationale, confidence, files, onChange, onApproveAll, onRejectAll, onReveal, onDelete }: Props): React.JSX.Element {
   const [expanded, setExpanded] = useState(true);
 
   return (
@@ -30,7 +31,7 @@ export default function ClusterGroup({ destination, rationale, confidence, files
       </div>
       {expanded && (
         <div style={{ padding: '0 12px 8px' }}>
-          {files.map((f) => <FileSuggestionRow key={f.filePath} suggestion={f} onChange={onChange} />)}
+          {files.map((f) => <FileSuggestionRow key={f.filePath} suggestion={f} onChange={onChange} onReveal={onReveal} onDelete={onDelete} />)}
         </div>
       )}
     </div>

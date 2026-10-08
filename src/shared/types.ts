@@ -97,6 +97,8 @@ export const IpcChannels = {
   SELECT_FOLDER: 'folder:select',
   OLLAMA_PULL: 'ollama:pull',
   OLLAMA_PULL_PROGRESS: 'ollama:pullProgress',
+  FILE_REVEAL: 'file:reveal',
+  FILE_TRASH: 'file:trash',
 } as const;
 
 export const EMBED_MODEL = 'nomic-embed-text';

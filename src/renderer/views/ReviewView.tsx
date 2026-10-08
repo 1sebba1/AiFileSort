@@ -2,6 +2,7 @@ import React from 'react';
 import { FileSuggestion } from '@shared/types';
 import { useIpc } from '../hooks/useIpc';
 import ClusterGroup from '../components/ClusterGroup';
+import FileActionButtons from '../components/FileActionButtons';
 import { looseClusterMembers } from './reviewSelection';
 
 interface Props {
@@ -33,6 +34,17 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
 
   function setStatus(filePath: string, status: FileSuggestion['status']): void {
     invoke(IpcChannels.SUGGESTION_SET_STATUS, { filePath, status }).then((updated) => {
+      onSuggestionsChange(updated as FileSuggestion[]);
+    });
+  }
+
+  function reveal(filePath: string): void {
+    void invoke(IpcChannels.FILE_REVEAL, { filePath });
+  }
+
+  // Main process confirms, moves the item to the Recycle Bin and returns the updated list
+  function remove(filePath: string): void {
+    invoke(IpcChannels.FILE_TRASH, { filePath }).then((updated) => {
       onSuggestionsChange(updated as FileSuggestion[]);
     });
   }
@@ -92,6 +104,7 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
                   → {s.suggestedDestination} &nbsp;·&nbsp; {s.rationale}
                 </div>
               </div>
+              <FileActionButtons filePath={s.filePath} onReveal={reveal} onDelete={remove} />
               <DecisionButtons status={s.status} onChange={(status) => setStatus(s.filePath, status)} />
             </div>
           ))}
@@ -108,6 +121,8 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
           onChange={setStatus}
           onApproveAll={() => { void setAllInCluster(clusterId, 'approved'); }}
           onRejectAll={() => { void setAllInCluster(clusterId, 'rejected'); }}
+          onReveal={reveal}
+          onDelete={remove}
         />
       ))}
 
@@ -127,6 +142,7 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
                   {s.currentFolder} → <strong>{s.suggestedDestination}</strong> &nbsp;·&nbsp; {Math.round(s.confidence * 100)}% &nbsp;·&nbsp; {s.rationale}
                 </div>
               </div>
+              <FileActionButtons filePath={s.filePath} onReveal={reveal} onDelete={remove} />
               <DecisionButtons status={s.status} onChange={(status) => setStatus(s.filePath, status)} />
             </div>
           ))}
