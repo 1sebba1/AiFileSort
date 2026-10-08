@@ -21,6 +21,7 @@ describe('executeApproved', () => {
     mockFsp.rename = jest.fn().mockResolvedValue(undefined);
     mockFsp.writeFile = jest.fn().mockResolvedValue(undefined);
     mockFsp.stat = jest.fn().mockResolvedValue({ dev: 1 } as import('fs').Stats);
+    mockFsp.lstat = jest.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
   });
 
   it('moves approved files and returns moved paths', async () => {
@@ -57,7 +58,6 @@ describe('executeApproved', () => {
     mockFsp.rename = jest.fn().mockRejectedValue(Object.assign(new Error('EXDEV'), { code: 'EXDEV' }));
     mockFsp.cp = jest.fn().mockResolvedValue(undefined);
     mockFsp.unlink = jest.fn().mockResolvedValue(undefined);
-    mockFsp.access = jest.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     const result = await executeApproved([approved], '/root', '/root/.undo.json');
     expect(mockFsp.cp).toHaveBeenCalledTimes(1);
     expect(mockFsp.unlink).toHaveBeenCalledTimes(1);
@@ -67,12 +67,19 @@ describe('executeApproved', () => {
 
   it('moves a folder suggestion as a whole directory on cross-drive moves', async () => {
     mockFsp.rename = jest.fn().mockRejectedValue(Object.assign(new Error('EXDEV'), { code: 'EXDEV' }));
-    mockFsp.access = jest.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     mockFsp.cp = jest.fn().mockResolvedValue(undefined);
     mockFsp.rm = jest.fn().mockResolvedValue(undefined);
     const folder: FileSuggestion = { ...approved, filePath: '/root/Hades', kind: 'folder', suggestedDestination: 'Games' };
     await executeApproved([folder], '/root', '/root/.undo.json');
-    expect(mockFsp.cp).toHaveBeenCalledWith('/root/Hades', expect.stringContaining('Hades'), { recursive: true });
+    expect(mockFsp.cp).toHaveBeenCalledWith('/root/Hades', expect.stringContaining('Hades'), { recursive: true, force: false, errorOnExist: true });
     expect(mockFsp.rm).toHaveBeenCalledWith('/root/Hades', { recursive: true, force: true });
+  });
+
+  it('never renames onto an existing destination (same-volume overwrite guard)', async () => {
+    mockFsp.lstat = jest.fn().mockResolvedValue({} as import('fs').Stats);
+    const result = await executeApproved([approved], '/root', '/root/.undo.json');
+    expect(mockFsp.rename).not.toHaveBeenCalled();
+    expect(result.skipped).toEqual(['/root/file.txt']);
+    expect(result.moved).toHaveLength(0);
   });
 });

@@ -2,18 +2,28 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { FileSuggestion, UndoManifest } from '@shared/types';
 
+/**
+ * Throws EEXIST unless nothing (not even a dangling symlink) exists at `target`.
+ * `fsp.rename` silently replaces an existing file on Windows and POSIX, so every move —
+ * same-volume or cross-drive, forward or undo — must pass this guard first.
+ */
+async function assertAbsent(target: string): Promise<void> {
+  try {
+    await fsp.lstat(target);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  throw Object.assign(new Error(`Destination already exists: ${target}`), { code: 'EEXIST' });
+}
+
 async function moveDir(from: string, to: string): Promise<void> {
+  await assertAbsent(to);
   try {
     await fsp.rename(from, to);
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
-      try {
-        await fsp.access(to);
-        throw Object.assign(new Error(`Destination already exists: ${to}`), { code: 'EEXIST' });
-      } catch (accessErr: unknown) {
-        if ((accessErr as NodeJS.ErrnoException).code !== 'ENOENT') throw accessErr;
-      }
-      await fsp.cp(from, to, { recursive: true });
+      await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: true });
       await fsp.rm(from, { recursive: true, force: true });
     } else {
       throw err;
@@ -22,22 +32,22 @@ async function moveDir(from: string, to: string): Promise<void> {
 }
 
 async function moveFile(from: string, to: string): Promise<void> {
+  await assertAbsent(to);
   try {
     await fsp.rename(from, to);
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
-      try {
-        await fsp.access(to);
-        throw Object.assign(new Error(`Destination already exists: ${to}`), { code: 'EEXIST' });
-      } catch (accessErr: unknown) {
-        if ((accessErr as NodeJS.ErrnoException).code !== 'ENOENT') throw accessErr;
-      }
-      await fsp.cp(from, to);
+      await fsp.cp(from, to, { force: false, errorOnExist: true });
       await fsp.unlink(from);
     } else {
       throw err;
     }
   }
+}
+
+// Windows (and default macOS) filesystems are case-insensitive: "Docs/a.txt" and "docs/A.txt" collide.
+function destinationKey(dest: string): string {
+  return process.platform === 'win32' || process.platform === 'darwin' ? dest.toLowerCase() : dest;
 }
 
 export async function executeApproved(
@@ -48,6 +58,10 @@ export async function executeApproved(
   const toMove = suggestions.filter((s) => s.status === 'approved');
 
   const resolvedRoot = path.resolve(rootPath);
+  const moved: string[] = [];
+  const skipped: string[] = [];
+  const claimed = new Set<string>();
+
   const manifest: UndoManifest = {
     timestamp: new Date().toISOString(),
     moves: toMove
@@ -55,14 +69,18 @@ export async function executeApproved(
         const dest = path.resolve(resolvedRoot, s.suggestedDestination, path.basename(s.filePath));
         // Reject LLM-suggested paths that escape the root
         if (!dest.startsWith(resolvedRoot + path.sep) && dest !== resolvedRoot) return null;
+        // Two approved items bound for the same path: only the first may move, or it would be overwritten.
+        const key = destinationKey(dest);
+        if (claimed.has(key)) {
+          skipped.push(s.filePath);
+          return null;
+        }
+        claimed.add(key);
         return { from: s.filePath, to: dest, completed: false, isFolder: s.kind === 'folder' };
       })
       .filter((m): m is NonNullable<typeof m> => m !== null),
   };
   await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
-
-  const moved: string[] = [];
-  const skipped: string[] = [];
 
   for (const entry of manifest.moves) {
     try {
