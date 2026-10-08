@@ -1,4 +1,4 @@
-import { clusterFiles, estimateK } from './clusteringEngine';
+import { clusterFiles, estimateK, normalize } from './clusteringEngine';
 
 // Mock ml-kmeans module with a simple k-means-like clustering algorithm
 jest.mock('ml-kmeans', () => ({
@@ -103,5 +103,14 @@ describe('clusterFiles', () => {
     }));
     const result = clusterFiles(vectors);
     expect(result).toHaveLength(9);
+  });
+});
+
+describe('normalize', () => {
+  it('scales a vector to unit length', () => {
+    expect(normalize([3, 4])).toEqual([0.6, 0.8]);
+  });
+  it('leaves a zero vector unchanged', () => {
+    expect(normalize([0, 0])).toEqual([0, 0]);
   });
 });

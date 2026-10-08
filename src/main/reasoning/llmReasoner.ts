@@ -1,11 +1,40 @@
+import path from 'path';
 import { ClusterAssignment, FileMeta, FileSuggestion, AtomicFolder } from '@shared/types';
-import { OllamaClient } from '../ollama/ollamaClient';
+import { OllamaClient, ChatOptions } from '../ollama/ollamaClient';
 
 interface LlmClusterResult {
   suggestedFolder: string;
   confidence: number;
   rationale: string;
 }
+
+export interface ReasonOptions {
+  /** Scan root — file paths in prompts are shown relative to it */
+  rootPath?: string;
+  /** Number of chat requests in flight at once */
+  concurrency?: number;
+  signal?: AbortSignal;
+}
+
+const FALLBACK: LlmClusterResult = { suggestedFolder: 'Unsorted', confidence: 0, rationale: '' };
+
+// Enough to show the pattern of a cluster without overflowing the context window
+const MAX_PATHS_IN_PROMPT = 30;
+const DEFAULT_CONCURRENCY = 3;
+const MAX_FOLDER_DEPTH = 3;
+
+// Rationale comes first so the model explains itself before committing to a folder
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    rationale: { type: 'string' },
+    suggestedFolder: { type: 'string' },
+    confidence: { type: 'number' },
+  },
+  required: ['rationale', 'suggestedFolder', 'confidence'],
+};
+
+const CHAT_OPTIONS: ChatOptions = { format: RESPONSE_SCHEMA, temperature: 0.2, numCtx: 4096 };
 
 const CATEGORY_HINTS = `
 Common category patterns (use these as guidance):
@@ -21,10 +50,41 @@ Common category patterns (use these as guidance):
 - Fonts: .ttf, .otf, .woff font files
 `.trim();
 
-function buildPrompt(filePaths: string[], existingFolders: string[]): string {
+function toDisplayPath(filePath: string, rootPath?: string): string {
+  const rel = rootPath ? path.relative(rootPath, filePath) : filePath;
+  return rel.replace(/\\/g, '/');
+}
+
+/** Evenly spaced sample so a large cluster is represented end to end, not just its first files */
+export function samplePaths(paths: string[], max: number): string[] {
+  if (paths.length <= max) return paths;
+  const step = paths.length / max;
+  return Array.from({ length: max }, (_, i) => paths[Math.floor(i * step)]);
+}
+
+function summarizeExtensions(files: FileMeta[]): string {
+  const counts = new Map<string, number>();
+  for (const f of files) {
+    const ext = f.extension || '(none)';
+    counts.set(ext, (counts.get(ext) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([ext, n]) => `${ext} ×${n}`)
+    .join(', ');
+}
+
+function buildPrompt(displayPaths: string[], metas: FileMeta[], existingFolders: string[]): string {
   const folderList = existingFolders.length
     ? `Existing folders (STRONGLY prefer these over creating new ones):\n${existingFolders.map((f) => `  - ${f}`).join('\n')}`
     : 'No existing folders yet — you may create one.';
+
+  const shown = samplePaths(displayPaths, MAX_PATHS_IN_PROMPT);
+  const sizeLine = shown.length < displayPaths.length
+    ? `This group has ${displayPaths.length} files; a representative sample of ${shown.length} is shown.`
+    : `This group has ${displayPaths.length} files.`;
+  const extLine = metas.length ? `\nFile types: ${summarizeExtensions(metas)}` : '';
 
   return `You are a file organisation assistant. Given a group of related files, suggest the single best folder to move them into.
 
@@ -32,29 +92,20 @@ ${folderList}
 
 ${CATEGORY_HINTS}
 
-Files in this group (shown as relative paths — the path gives context about where they came from):
-${filePaths.map((p) => `- ${p}`).join('\n')}
+${sizeLine}${extLine}
+Files (relative paths — the path gives context about where they came from):
+${shown.map((p) => `- ${p}`).join('\n')}
 
 Rules:
 1. If an existing folder fits well, use it — do not create a new one unnecessarily.
 2. Use "/" for subfolders only when genuinely needed (e.g. "Documents/Work").
 3. Be specific: "Games" is better than "Misc", "Drivers" is better than "Software".
+4. confidence is between 0 and 1: high when the files clearly share one purpose, low when they are mixed.
 
-Respond ONLY with valid JSON in this exact format:
-{"suggestedFolder": "FolderName", "confidence": 0.85, "rationale": "One sentence explanation."}`;
+Respond with JSON: {"rationale": "One sentence explanation.", "suggestedFolder": "FolderName", "confidence": 0.85}`;
 }
 
-function parseLlmResponse(raw: string): LlmClusterResult {
-  try {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('no JSON found');
-    return JSON.parse(match[0]) as LlmClusterResult;
-  } catch {
-    return { suggestedFolder: 'Unsorted', confidence: 0, rationale: '' };
-  }
-}
-
-function buildAtomicPrompt(folder: AtomicFolder, existingFolders: string[]): string {
+function buildAtomicPrompt(folder: AtomicFolder, existingFolders: string[], rootPath?: string): string {
   const folderList = existingFolders.length
     ? `Existing folders (STRONGLY prefer these):\n${existingFolders.map((f) => `  - ${f}`).join('\n')}`
     : 'No existing folders yet.';
@@ -69,15 +120,89 @@ ${folderList}
 
 ${CATEGORY_HINTS}
 
-Folder name: "${folder.name}"
+Folder: "${toDisplayPath(folder.absolutePath, rootPath)}"
 Characteristics: ${hints}
 
 Rules:
 1. Prefer an existing folder if one fits.
 2. Be specific: "Games" beats "Misc", "Software" beats "Files".
+3. confidence is between 0 and 1.
 
-Respond ONLY with valid JSON:
-{"suggestedFolder": "FolderName", "confidence": 0.85, "rationale": "One sentence explanation."}`;
+Respond with JSON: {"rationale": "One sentence explanation.", "suggestedFolder": "FolderName", "confidence": 0.85}`;
+}
+
+/**
+ * Turns model output into a safe relative folder path: no traversal, no drive letters,
+ * no characters Windows rejects, limited depth. Matches existing folders case-insensitively
+ * so "documents" reuses "Documents" instead of creating a near-duplicate.
+ */
+export function sanitizeFolder(raw: unknown, existingFolders: string[] = []): string {
+  if (typeof raw !== 'string') return FALLBACK.suggestedFolder;
+  const segments = raw
+    .replace(/\\/g, '/')
+    .replace(/^[a-zA-Z]:/, '') // absolute Windows path → treat as relative
+    .split('/')
+    .map((s) => s.replace(/[<>:"|?*\x00-\x1f]/g, '').trim().replace(/[. ]+$/, ''))
+    .filter((s) => s && s !== '.' && s !== '..')
+    .slice(0, MAX_FOLDER_DEPTH);
+  if (segments.length === 0) return FALLBACK.suggestedFolder;
+
+  const existing = existingFolders.find((f) => f.toLowerCase() === segments[0].toLowerCase());
+  if (existing) segments[0] = existing;
+  return segments.join('/');
+}
+
+export function clampConfidence(raw: unknown): number {
+  let n = typeof raw === 'string' ? parseFloat(raw) : typeof raw === 'number' ? raw : NaN;
+  if (!Number.isFinite(n)) return 0;
+  if (n > 1 && n <= 100) n /= 100; // model answered as a percentage
+  return Math.min(1, Math.max(0, n));
+}
+
+export function parseLlmResponse(raw: string, existingFolders: string[] = []): LlmClusterResult {
+  try {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('no JSON found');
+    const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+    return {
+      suggestedFolder: sanitizeFolder(parsed.suggestedFolder, existingFolders),
+      confidence: clampConfidence(parsed.confidence),
+      rationale: typeof parsed.rationale === 'string' ? parsed.rationale.trim() : '',
+    };
+  } catch {
+    return { ...FALLBACK };
+  }
+}
+
+/** Runs tasks with at most `limit` in flight, preserving result order. Stops starting new tasks once aborted. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+  fallback: R,
+  onDone: (done: number) => void,
+  signal?: AbortSignal,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length).fill(fallback);
+  let next = 0;
+  let done = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length && !signal?.aborted) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+      onDone(++done);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return results;
+}
+
+async function ask(client: OllamaClient, model: string, prompt: string, existingFolders: string[]): Promise<LlmClusterResult> {
+  try {
+    return parseLlmResponse(await client.chat(model, prompt, CHAT_OPTIONS), existingFolders);
+  } catch {
+    return { ...FALLBACK };
+  }
 }
 
 export async function categorizeAtomicFolders(
@@ -86,30 +211,26 @@ export async function categorizeAtomicFolders(
   client: OllamaClient,
   model: string,
   onProgress: (done: number, total: number) => void,
+  options: ReasonOptions = {},
 ): Promise<FileSuggestion[]> {
-  const suggestions: FileSuggestion[] = [];
-  for (let i = 0; i < folders.length; i++) {
-    const folder = folders[i];
-    const prompt = buildAtomicPrompt(folder, existingFolders);
-    let result: LlmClusterResult;
-    try {
-      const raw = await client.chat(model, prompt);
-      result = parseLlmResponse(raw);
-    } catch {
-      result = { suggestedFolder: 'Unsorted', confidence: 0, rationale: '' };
-    }
-    suggestions.push({
-      filePath: folder.absolutePath,
-      clusterId: -1,
-      suggestedDestination: result.suggestedFolder,
-      rationale: result.rationale,
-      confidence: result.confidence,
-      status: 'pending',
-      isAtomicFolder: true,
-    });
-    onProgress(i + 1, folders.length);
-  }
-  return suggestions;
+  const results = await mapWithConcurrency(
+    folders,
+    options.concurrency ?? DEFAULT_CONCURRENCY,
+    (folder) => ask(client, model, buildAtomicPrompt(folder, existingFolders, options.rootPath), existingFolders),
+    FALLBACK,
+    (done) => onProgress(done, folders.length),
+    options.signal,
+  );
+
+  return folders.map((folder, i) => ({
+    filePath: folder.absolutePath,
+    clusterId: -1,
+    suggestedDestination: results[i].suggestedFolder,
+    rationale: results[i].rationale,
+    confidence: results[i].confidence,
+    status: 'pending',
+    isAtomicFolder: true,
+  }));
 }
 
 export async function reasonClusters(
@@ -119,35 +240,33 @@ export async function reasonClusters(
   client: OllamaClient,
   model: string,
   onProgress: (done: number, total: number) => void,
+  options: ReasonOptions = {},
 ): Promise<FileSuggestion[]> {
   const clusterMap = new Map<number, string[]>();
   for (const a of assignments) {
-    const meta = fileMap.get(a.filePath);
-    // Use relative path from the scan root for richer context; fall back to basename
-    const label = meta ? a.filePath.replace(/\\/g, '/') : a.filePath;
     const paths = clusterMap.get(a.clusterId) ?? [];
-    paths.push(label);
+    paths.push(a.filePath);
     clusterMap.set(a.clusterId, paths);
   }
 
-  const clusterResults = new Map<number, LlmClusterResult>();
   const clusterIds = Array.from(clusterMap.keys());
-
-  for (let i = 0; i < clusterIds.length; i++) {
-    const clusterId = clusterIds[i];
-    const filePaths = clusterMap.get(clusterId)!;
-    const prompt = buildPrompt(filePaths, existingFolders);
-    try {
-      const raw = await client.chat(model, prompt);
-      clusterResults.set(clusterId, parseLlmResponse(raw));
-    } catch {
-      clusterResults.set(clusterId, { suggestedFolder: 'Unsorted', confidence: 0, rationale: '' });
-    }
-    onProgress(i + 1, clusterIds.length);
-  }
+  const results = await mapWithConcurrency(
+    clusterIds,
+    options.concurrency ?? DEFAULT_CONCURRENCY,
+    (clusterId) => {
+      const filePaths = clusterMap.get(clusterId)!;
+      const metas = filePaths.map((p) => fileMap.get(p)).filter((m): m is FileMeta => !!m);
+      const displayPaths = filePaths.map((p) => toDisplayPath(p, options.rootPath));
+      return ask(client, model, buildPrompt(displayPaths, metas, existingFolders), existingFolders);
+    },
+    FALLBACK,
+    (done) => onProgress(done, clusterIds.length),
+    options.signal,
+  );
+  const clusterResults = new Map(clusterIds.map((id, i) => [id, results[i]]));
 
   return assignments.map((a) => {
-    const cr = clusterResults.get(a.clusterId) ?? { suggestedFolder: 'Unsorted', confidence: 0, rationale: '' };
+    const cr = clusterResults.get(a.clusterId) ?? FALLBACK;
     return {
       filePath: a.filePath,
       clusterId: a.clusterId,

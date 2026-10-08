@@ -85,4 +85,21 @@ export const IpcChannels = {
   UNDO_COMPLETE: 'undo:complete',
   RECLUSTER: 'recluster',
   SELECT_FOLDER: 'folder:select',
+  OLLAMA_PULL: 'ollama:pull',
+  OLLAMA_PULL_PROGRESS: 'ollama:pullProgress',
 } as const;
+
+export const EMBED_MODEL = 'nomic-embed-text';
+
+export interface OllamaHealth {
+  healthy: boolean;
+  embedModel: boolean;
+  chatModel: boolean;
+}
+
+export interface PullProgress {
+  model: string;
+  status: string;
+  /** 0–100 while layers download; null for steps without a size (manifest, verify) */
+  percent: number | null;
+}

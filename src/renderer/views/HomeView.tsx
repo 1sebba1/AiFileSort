@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AppConfig } from '../App';
 import { useIpc } from '../hooks/useIpc';
 import OllamaSetupGuide from '../components/OllamaSetupGuide';
+import { EMBED_MODEL, OllamaHealth, PullProgress } from '@shared/types';
 
 interface Props {
   config: AppConfig;
@@ -9,15 +10,81 @@ interface Props {
   onStart: () => void;
 }
 
+const OLLAMA_POLL_MS = 5000;
+
 export default function HomeView({ config, onConfigChange, onStart }: Props): React.JSX.Element {
-  const { invoke, IpcChannels } = useIpc();
-  const [health, setHealth] = useState<{ healthy: boolean; embedModel: boolean; chatModel: boolean } | null>(null);
+  const { invoke, on, off, IpcChannels } = useIpc();
+  const [health, setHealth] = useState<OllamaHealth | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [pull, setPull] = useState<PullProgress | null>(null);
+  const [pullError, setPullError] = useState<string | null>(null);
+  // Edited separately and committed on blur/Enter, so half-typed names never trigger a download
+  const [modelDraft, setModelDraft] = useState(config.chatModel);
+  const chatModelRef = useRef(config.chatModel);
+  chatModelRef.current = config.chatModel;
+
+  const checkHealth = useCallback(async () => {
+    const model = chatModelRef.current;
+    const h = await invoke(IpcChannels.OLLAMA_HEALTH, { chatModel: model }) as OllamaHealth;
+    if (model === chatModelRef.current) setHealth(h); // ignore answers for a model the user has since changed
+  }, []);
+
+  const missingModels = health?.healthy
+    ? [!health.embedModel && EMBED_MODEL, !health.chatModel && config.chatModel].filter((m): m is string => !!m)
+    : [];
+
+  const installModels = useCallback(async (models: string[]) => {
+    setPulling(true);
+    setPullError(null);
+    try {
+      for (const model of models) {
+        const result = await invoke(IpcChannels.OLLAMA_PULL, { model }) as { ok: boolean; error?: string };
+        if (!result.ok) {
+          setPullError(`Could not download "${model}": ${result.error}`);
+          return;
+        }
+      }
+    } finally {
+      // Refresh health before clearing `pulling`, or the auto-install effect would see stale "missing" and pull again
+      setPull(null);
+      await checkHealth().catch(() => {});
+      setPulling(false);
+    }
+  }, [checkHealth]);
 
   useEffect(() => {
-    invoke(IpcChannels.OLLAMA_HEALTH, { chatModel: config.chatModel }).then((h) =>
-      setHealth(h as typeof health),
-    );
+    setPullError(null);
+    checkHealth();
   }, [config.chatModel]);
+
+  // Install missing models automatically; after a failure, wait for the user to press Retry
+  useEffect(() => {
+    if (missingModels.length && !pulling && !pullError) installModels(missingModels);
+  }, [health, pulling, pullError]);
+
+  // Pick Ollama up as soon as the user starts it
+  useEffect(() => {
+    if (!health || health.healthy) return;
+    const timer = setInterval(checkHealth, OLLAMA_POLL_MS);
+    return () => clearInterval(timer);
+  }, [health]);
+
+  useEffect(() => {
+    const onProgress = (p: unknown) => setPull(p as PullProgress);
+    on(IpcChannels.OLLAMA_PULL_PROGRESS, onProgress);
+    return () => off(IpcChannels.OLLAMA_PULL_PROGRESS, onProgress);
+  }, []);
+
+  function commitModel() {
+    const model = modelDraft.trim();
+    if (model && model !== config.chatModel) onConfigChange({ ...config, chatModel: model });
+    else setModelDraft(config.chatModel);
+  }
+
+  function retry() {
+    setPullError(null);
+    checkHealth();
+  }
 
   const ready = health?.healthy && health.embedModel && health.chatModel;
 
@@ -52,8 +119,11 @@ export default function HomeView({ config, onConfigChange, onStart }: Props): Re
         <span>Chat model (Ollama):</span>
         <input
           type="text"
-          value={config.chatModel}
-          onChange={(e) => onConfigChange({ ...config, chatModel: e.target.value })}
+          value={modelDraft}
+          disabled={pulling}
+          onChange={(e) => setModelDraft(e.target.value)}
+          onBlur={commitModel}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
           style={{ display: 'block', width: '100%', marginTop: 4, padding: 8 }}
         />
       </label>
@@ -71,9 +141,11 @@ export default function HomeView({ config, onConfigChange, onStart }: Props): Re
       <div style={{ marginTop: 24 }}>
         {health && !ready && (
           <OllamaSetupGuide
-            chatModel={config.chatModel}
-            embedOk={health.embedModel}
-            chatOk={health.chatModel}
+            ollamaRunning={health.healthy}
+            missingModels={missingModels}
+            pull={pull}
+            pullError={pullError}
+            onRetry={retry}
           />
         )}
         <button

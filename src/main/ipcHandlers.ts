@@ -2,7 +2,7 @@ import { ipcMain, dialog } from 'electron';
 import path from 'path';
 import os from 'os';
 import fsp from 'fs/promises';
-import { IpcChannels } from '@shared/types';
+import { IpcChannels, EMBED_MODEL, OllamaHealth, PullProgress } from '@shared/types';
 import { OllamaClient } from './ollama/ollamaClient';
 import { scanDirectory, detectAtomicFolders } from './scanner/fileScanner';
 import { extractContent } from './extractor/contentExtractor';
@@ -16,6 +16,7 @@ import { BrowserWindow } from 'electron';
 const ollamaClient = new OllamaClient();
 let scanAbortController: AbortController | null = null;
 let currentSuggestions: FileSuggestion[] = [];
+const activePulls = new Map<string, Promise<void>>();
 const MANIFEST_PATH = path.join(os.tmpdir(), 'aifilesort-undo.json');
 
 export function registerIpcHandlers(win: BrowserWindow): void {
@@ -27,12 +28,34 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     return result.canceled ? null : result.filePaths[0];
   });
 
-  ipcMain.handle(IpcChannels.OLLAMA_HEALTH, async (_, { chatModel }: { chatModel: string }) => {
+  ipcMain.handle(IpcChannels.OLLAMA_HEALTH, async (_, { chatModel }: { chatModel: string }): Promise<OllamaHealth> => {
     const healthy = await ollamaClient.checkHealth();
     if (!healthy) return { healthy: false, embedModel: false, chatModel: false };
-    const embedOk = await ollamaClient.checkModelAvailable('nomic-embed-text');
-    const chatOk = await ollamaClient.checkModelAvailable(chatModel);
+    const [embedOk, chatOk] = await Promise.all([
+      ollamaClient.checkModelAvailable(EMBED_MODEL),
+      ollamaClient.checkModelAvailable(chatModel),
+    ]);
     return { healthy, embedModel: embedOk, chatModel: chatOk };
+  });
+
+  ipcMain.handle(IpcChannels.OLLAMA_PULL, async (_, { model }: { model: string }) => {
+    // A second request for the same model joins the download already in progress
+    let pull = activePulls.get(model);
+    if (!pull) {
+      pull = ollamaClient
+        .pullModel(model, (status, percent) => {
+          const progress: PullProgress = { model, status, percent };
+          win.webContents.send(IpcChannels.OLLAMA_PULL_PROGRESS, progress);
+        })
+        .finally(() => activePulls.delete(model));
+      activePulls.set(model, pull);
+    }
+    try {
+      await pull;
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
   });
 
   ipcMain.handle(IpcChannels.SCAN_START, async (_, { rootPath, chatModel, k }: { rootPath: string; chatModel: string; k?: number }) => {
@@ -58,7 +81,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
     // Phase: embedding
     win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'embedding', current: 0, total: files.length });
-    const vectors = await embedFiles(files, ollamaClient, 'nomic-embed-text', 20, (pct) => {
+    const vectors = await embedFiles(files, ollamaClient, EMBED_MODEL, 32, (pct) => {
       win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'embedding', current: pct, total: 100 });
     }, signal);
 
@@ -83,11 +106,13 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'reasoning', current: 0, total: assignments.length });
     const fileSuggestions = await reasonClusters(assignments, fileMap, topLevelFolders, ollamaClient, chatModel, (done, total) => {
       win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'reasoning', current: done, total });
-    });
+    }, { rootPath, signal });
+
+    if (signal.aborted) return;
 
     // Categorize atomic folders (shown separately — not destructured)
     const atomicSuggestions = atomicFolders.length > 0
-      ? await categorizeAtomicFolders(atomicFolders, topLevelFolders, ollamaClient, chatModel, () => {})
+      ? await categorizeAtomicFolders(atomicFolders, topLevelFolders, ollamaClient, chatModel, () => {}, { rootPath, signal })
       : [];
 
     const suggestions = [...atomicSuggestions, ...fileSuggestions];
