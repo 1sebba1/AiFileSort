@@ -2,6 +2,10 @@ import path from 'path';
 import { ClusterAssignment, FileMeta, FileSuggestion, AtomicFolder } from '@shared/types';
 import { OllamaClient, ChatOptions } from '../ollama/ollamaClient';
 import { evenSample } from '../context/sampling';
+import { FolderProfile, describeProfile, topFolders } from '../context/folderProfiles';
+import { meanDirection } from '../context/vectorMath';
+import { summarizeSignatures } from '../context/signatures';
+import { summarizeOrigins } from '../context/fileOrigin';
 
 interface LlmClusterResult {
   suggestedFolder: string;
@@ -15,6 +19,10 @@ export interface ReasonOptions {
   /** Number of chat requests in flight at once */
   concurrency?: number;
   signal?: AbortSignal;
+  /** Profiles of the user's existing folders, for retrieving the most similar ones per cluster */
+  profiles?: FolderProfile[];
+  /** Embeddings by absolute file path */
+  vectors?: Map<string, number[]>;
 }
 
 const FALLBACK: LlmClusterResult = { suggestedFolder: 'Unsorted', confidence: 0, rationale: '' };
@@ -51,6 +59,45 @@ Common category patterns (use these as guidance):
 - Fonts: .ttf, .otf, .woff font files
 `.trim();
 
+// ~1,200 tokens at ~4 chars/token — leaves room for hints, files and the answer in a 4096 context
+export const CONTEXT_CHAR_BUDGET = 4800;
+export const MAX_FOLDER_LIST = 60;
+export const SIMILAR_FOLDER_COUNT = 5;
+
+export interface ContextInput {
+  similar: FolderProfile[];
+  allFolders: string[];
+  signatureLines: string[];
+  originLine: string | null;
+}
+
+/** Evidence about the user's organisation for one prompt, shrunk until it fits the budget */
+export function buildContextSection(input: ContextInput, budget = CONTEXT_CHAR_BUDGET): string {
+  const render = (withSamples: boolean, folderCap: number): string => {
+    const parts: string[] = [];
+    if (input.similar.length) {
+      parts.push(`Most similar existing folders:\n${input.similar.map((p) => `  - ${describeProfile(p, withSamples)}`).join('\n')}`);
+    }
+    if (input.allFolders.length && folderCap > 0) {
+      parts.push(`All existing folders: ${input.allFolders.slice(0, folderCap).join(', ')}`);
+    }
+    if (input.signatureLines.length) {
+      parts.push(`Known patterns in this group:\n${input.signatureLines.map((l) => `  - ${l}`).join('\n')}`);
+    }
+    if (input.originLine) parts.push(`Downloaded from: ${input.originLine}`);
+    return parts.join('\n');
+  };
+
+  let cap = MAX_FOLDER_LIST;
+  let text = render(true, cap);
+  if (text.length > budget) text = render(false, cap);
+  while (text.length > budget && cap > 0) {
+    cap = Math.floor(cap / 2);
+    text = render(false, cap);
+  }
+  return text.length > budget ? text.slice(0, budget) : text;
+}
+
 function toDisplayPath(filePath: string, rootPath?: string): string {
   const rel = rootPath ? path.relative(rootPath, filePath) : filePath;
   return rel.replace(/\\/g, '/');
@@ -69,11 +116,7 @@ function summarizeExtensions(files: FileMeta[]): string {
     .join(', ');
 }
 
-function buildPrompt(displayPaths: string[], metas: FileMeta[], existingFolders: string[]): string {
-  const folderList = existingFolders.length
-    ? `Existing folders (STRONGLY prefer these over creating new ones):\n${existingFolders.map((f) => `  - ${f}`).join('\n')}`
-    : 'No existing folders yet — you may create one.';
-
+function buildPrompt(displayPaths: string[], metas: FileMeta[], context: string): string {
   const shown = evenSample(displayPaths, MAX_PATHS_IN_PROMPT);
   const sizeLine = shown.length < displayPaths.length
     ? `This group has ${displayPaths.length} files; a representative sample of ${shown.length} is shown.`
@@ -82,7 +125,7 @@ function buildPrompt(displayPaths: string[], metas: FileMeta[], existingFolders:
 
   return `You are a file organisation assistant. Given a group of related files, suggest the single best folder to move them into.
 
-${folderList}
+${context || 'No existing folders yet — you may create one.'}
 
 ${CATEGORY_HINTS}
 
@@ -92,16 +135,17 @@ ${shown.map((p) => `- ${p}`).join('\n')}
 
 Rules:
 1. If an existing folder fits well, use it — do not create a new one unnecessarily.
-2. Use "/" for subfolders only when genuinely needed (e.g. "Documents/Work").
-3. Be specific: "Games" is better than "Misc", "Drivers" is better than "Software".
-4. confidence is between 0 and 1: high when the files clearly share one purpose, low when they are mixed.
+2. Prefer the most similar existing folder unless the evidence clearly points elsewhere.
+3. Use "/" for subfolders only when genuinely needed (e.g. "Documents/Work").
+4. Be specific: "Games" is better than "Misc", "Drivers" is better than "Software".
+5. confidence is between 0 and 1: high when the files clearly share one purpose, low when they are mixed.
 
 Respond with JSON: {"rationale": "One sentence explanation.", "suggestedFolder": "FolderName", "confidence": 0.85}`;
 }
 
 function buildAtomicPrompt(folder: AtomicFolder, existingFolders: string[], rootPath?: string): string {
   const folderList = existingFolders.length
-    ? `Existing folders (STRONGLY prefer these):\n${existingFolders.map((f) => `  - ${f}`).join('\n')}`
+    ? `Existing folders (STRONGLY prefer these):\n${existingFolders.slice(0, MAX_FOLDER_LIST).map((f) => `  - ${f}`).join('\n')}`
     : 'No existing folders yet.';
   const hints = [
     folder.hasExecutable ? 'contains executables (likely software or a game)' : null,
@@ -251,7 +295,18 @@ export async function reasonClusters(
       const filePaths = clusterMap.get(clusterId)!;
       const metas = filePaths.map((p) => fileMap.get(p)).filter((m): m is FileMeta => !!m);
       const displayPaths = filePaths.map((p) => toDisplayPath(p, options.rootPath));
-      return ask(client, model, buildPrompt(displayPaths, metas, existingFolders), existingFolders);
+      const profiles = options.profiles ?? [];
+      const clusterVectors = filePaths.map((p) => options.vectors?.get(p)).filter((v): v is number[] => !!v);
+      const similar = profiles.length > 0 && clusterVectors.length > 0
+        ? topFolders(profiles, meanDirection(clusterVectors), SIMILAR_FOLDER_COUNT).map((r) => r.profile)
+        : [];
+      const context = buildContextSection({
+        similar,
+        allFolders: existingFolders,
+        signatureLines: summarizeSignatures(metas.map((m) => m.name)),
+        originLine: summarizeOrigins(metas),
+      });
+      return ask(client, model, buildPrompt(displayPaths, metas, context), existingFolders);
     },
     FALLBACK,
     (done) => onProgress(done, clusterIds.length),

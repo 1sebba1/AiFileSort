@@ -1,4 +1,5 @@
-import { reasonClusters, categorizeAtomicFolders, sanitizeFolder, clampConfidence } from './llmReasoner';
+import { reasonClusters, categorizeAtomicFolders, sanitizeFolder, clampConfidence, buildContextSection } from './llmReasoner';
+import { FolderProfile } from '../context/folderProfiles';
 import { OllamaClient } from '../ollama/ollamaClient';
 import { ClusterAssignment, FileMeta } from '@shared/types';
 
@@ -182,5 +183,82 @@ describe('clampConfidence', () => {
     [undefined, 0],
   ])('%p → %p', (raw, expected) => {
     expect(clampConfidence(raw)).toBeCloseTo(expected);
+  });
+});
+
+function profile(path: string, centroid: number[], sampleNames = ['a.pdf']): FolderProfile {
+  return { path, fileCount: 10, topExtensions: [['.pdf', 10]], sampleNames, centroid, vectorSum: centroid, embeddedCount: 10 };
+}
+
+describe('buildContextSection', () => {
+  it('includes every section that has content', () => {
+    const text = buildContextSection({
+      similar: [profile('Finance/Bank', [1, 0])],
+      allFolders: ['Finance', 'Finance/Bank'],
+      signatureLines: ['Bank statement — Finance (2 files)'],
+      originLine: 'hsbc.co.uk (2)',
+    });
+    expect(text).toContain('Most similar existing folders:\n  - Finance/Bank (10 files: .pdf ×10) e.g. "a.pdf"');
+    expect(text).toContain('All existing folders: Finance, Finance/Bank');
+    expect(text).toContain('Known patterns in this group:\n  - Bank statement — Finance (2 files)');
+    expect(text).toContain('Downloaded from: hsbc.co.uk (2)');
+  });
+
+  it('omits empty sections', () => {
+    const text = buildContextSection({ similar: [], allFolders: ['Docs'], signatureLines: [], originLine: null });
+    expect(text).toBe('All existing folders: Docs');
+  });
+
+  it('stays within budget with very long folder and file names', () => {
+    const longName = 'x'.repeat(250);
+    const text = buildContextSection({
+      similar: Array.from({ length: 5 }, (_, i) => profile(`Folder${i}/${longName}`, [1, 0], [longName, longName, longName, longName, longName])),
+      allFolders: Array.from({ length: 60 }, (_, i) => `Folder${i}/${longName}`),
+      signatureLines: ['Font — Fonts (1 file)'],
+      originLine: 'a.com (1)',
+    });
+    expect(text.length).toBeLessThanOrEqual(4800);
+    expect(text).toContain('Most similar existing folders:');
+  });
+});
+
+describe('reasonClusters with context', () => {
+  it('puts the most similar folders, signatures and origins in the prompt', async () => {
+    const client = { chat: jest.fn().mockResolvedValue(llmResponse) } as unknown as OllamaClient;
+    const meta = { ...makeMeta('/root/IMG_0001.jpg'), originHost: 'drive.google.com' };
+    await reasonClusters(
+      [{ filePath: meta.absolutePath, clusterId: 0 }],
+      new Map([[meta.absolutePath, meta]]),
+      ['Media', 'Media/Photos', 'Finance'],
+      client, 'm', () => {},
+      {
+        rootPath: '/root',
+        profiles: [profile('Media/Photos', [0, 1]), profile('Finance', [1, 0])],
+        vectors: new Map([[meta.absolutePath, [0.1, 1]]]),
+      },
+    );
+    const prompt: string = (client.chat as jest.Mock).mock.calls[0][1];
+    const similar = prompt.slice(prompt.indexOf('Most similar existing folders:'));
+    expect(similar.indexOf('Media/Photos')).toBeLessThan(similar.indexOf('Finance ('));
+    expect(prompt).toContain('All existing folders: Media, Media/Photos, Finance');
+    expect(prompt).toContain('Phone camera — Photos');
+    expect(prompt).toContain('Downloaded from: drive.google.com (1)');
+    expect(prompt).toContain('Prefer the most similar existing folder');
+  });
+
+  it('says there are no folders when there is nothing to reuse', async () => {
+    const client = { chat: jest.fn().mockResolvedValue(llmResponse) } as unknown as OllamaClient;
+    await reasonClusters(
+      [{ filePath: '/root/a.txt', clusterId: 0 }],
+      new Map([['/root/a.txt', makeMeta('/root/a.txt')]]),
+      [], client, 'm', () => {},
+    );
+    expect((client.chat as jest.Mock).mock.calls[0][1]).toContain('No existing folders yet — you may create one.');
+  });
+
+  it('returns no suggestions when there are no clusters', async () => {
+    const client = { chat: jest.fn() } as unknown as OllamaClient;
+    expect(await reasonClusters([], new Map(), ['A'], client, 'm', () => {})).toEqual([]);
+    expect(client.chat).not.toHaveBeenCalled();
   });
 });
