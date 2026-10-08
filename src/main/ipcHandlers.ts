@@ -4,7 +4,7 @@ import os from 'os';
 import fsp from 'fs/promises';
 import { IpcChannels, EMBED_MODEL, OllamaHealth, PullProgress } from '@shared/types';
 import { OllamaClient } from './ollama/ollamaClient';
-import { scanDirectory, detectAtomicFolders } from './scanner/fileScanner';
+import { scanDirectory } from './scanner/fileScanner';
 import { extractContent } from './extractor/contentExtractor';
 import { embedFiles } from './embedding/embeddingEngine';
 import { clusterFiles } from './clustering/clusteringEngine';
@@ -64,11 +64,11 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
     // Phase: scanning — detect atomic folders first, then walk remaining files
     win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'scanning', current: 0, total: 0 });
-    const atomicFolders = await detectAtomicFolders(rootPath);
-    const atomicPaths = new Set(atomicFolders.map((f) => f.absolutePath));
-    const files = await scanDirectory(rootPath, (count) => {
+    const scan = await scanDirectory(rootPath, (count) => {
       win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'scanning', current: count, total: count });
-    }, atomicPaths);
+    });
+    const atomicFolders = scan.atomicFolders;
+    const files = scan.files.filter((f) => f.relativeFolder === '');
 
     if (signal.aborted) return;
 

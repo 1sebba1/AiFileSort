@@ -11,6 +11,7 @@ function makeMeta(filePath: string): FileMeta {
     createdAt: new Date(),
     modifiedAt: new Date(),
     mimeType: 'text/plain',
+    relativeFolder: '',
   };
 }
 

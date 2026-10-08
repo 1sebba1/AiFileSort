@@ -7,6 +7,10 @@ export interface FileMeta {
   modifiedAt: Date;
   mimeType: string;
   contentSnippet?: string; // populated by ContentExtractor
+  /** Folder relative to the scan root, '/'-separated; '' for loose files at the root */
+  relativeFolder: string;
+  /** Website the file was downloaded from (Windows Zone.Identifier), e.g. 'github.com' */
+  originHost?: string;
 }
 
 export interface FileVector {

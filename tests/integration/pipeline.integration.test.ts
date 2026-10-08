@@ -38,7 +38,7 @@ describe('Full pipeline integration', () => {
   it('scans, embeds, clusters, and reasons over a small temp directory', async () => {
     if (skipAll) return;
 
-    const files = await scanDirectory(tmpDir, () => {});
+    const { files } = await scanDirectory(tmpDir, () => {});
     expect(files.length).toBe(4);
 
     for (const f of files) {

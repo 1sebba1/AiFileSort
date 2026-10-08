@@ -11,6 +11,7 @@ function makeFile(name: string): FileMeta {
     createdAt: new Date('2024-01-01'),
     modifiedAt: new Date('2024-01-01'),
     mimeType: 'text/plain',
+    relativeFolder: '',
     contentSnippet: 'some content',
   };
 }
