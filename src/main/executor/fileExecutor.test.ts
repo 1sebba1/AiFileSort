@@ -56,6 +56,7 @@ describe('executeApproved', () => {
     mockFsp.rename = jest.fn().mockRejectedValue(Object.assign(new Error('EXDEV'), { code: 'EXDEV' }));
     mockFsp.cp = jest.fn().mockResolvedValue(undefined);
     mockFsp.unlink = jest.fn().mockResolvedValue(undefined);
+    mockFsp.access = jest.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     const result = await executeApproved([approved], '/root', '/root/.undo.json');
     expect(mockFsp.cp).toHaveBeenCalledTimes(1);
     expect(mockFsp.unlink).toHaveBeenCalledTimes(1);

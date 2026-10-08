@@ -1,5 +1,4 @@
 module.exports = {
-  preset: 'ts-jest',
   testEnvironment: 'node',
   testMatch: ['**/*.test.ts'],
   testPathIgnorePatterns: ['tests/e2e'],
@@ -7,14 +6,15 @@ module.exports = {
   moduleNameMapper: {
     '^@shared/(.*)$': '<rootDir>/src/shared/$1',
   },
+  // babel-jest strips types only (ts-jest can't load TypeScript 7); run `npm run typecheck` for type errors
   transform: {
-    '^.+\.tsx?$': ['ts-jest', {
-      tsconfig: {
-        skipLibCheck: true,
-      },
+    '^.+\\.tsx?$': ['babel-jest', {
+      presets: [
+        ['@babel/preset-env', { targets: { node: 'current' } }],
+        '@babel/preset-typescript',
+      ],
     }],
   },
-  // Allow ml-kmeans to be required even though it's ESM
   testEnvironmentOptions: {
     testTimeout: 120000,
   },
