@@ -391,9 +391,9 @@ It is currently in:
 Alternative folders:
 ${c.alternatives.map((p) => `  - ${describeProfile(p)}`).join('\n')}
 
-Does this file belong in its current folder, or in one of the alternatives? If its content matches an alternative folder better than its current folder, answer "move": true and set suggestedFolder to exactly one of: ${options}. Only answer "move": false when the current folder is a reasonable home for it.
+Does this file belong in its current folder, or in one of the alternatives? If its content matches an alternative folder better than its current folder, answer "move": true and set suggestedFolder to exactly one of: ${options}. People often file things deliberately, so leave a file where it is if the current folder is a plausible home for it.
 
-Respond with JSON: {"rationale": "One sentence explanation.", "move": true or false, "suggestedFolder": "", "confidence": 0.5}`;
+Respond with JSON: {"rationale": "One sentence explanation.", "move": false, "suggestedFolder": "", "confidence": 0.5}`;
 }
 
 /** Stage 2 of misfit detection: the LLM confirms or rejects each embedding outlier */

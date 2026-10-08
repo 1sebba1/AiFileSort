@@ -55,6 +55,8 @@ describe('Context-aware pipeline (live Ollama)', () => {
 
     const misfiled = suggestions.filter((s) => s.kind === 'misfiled');
     expect(misfiled.map((s) => path.basename(s.filePath))).toContain('Invoice_0042.txt');
+    // No false positives: correctly filed statements and photos must not be flagged
+    expect(misfiled.filter((s) => /^(Statement_|IMG_)/.test(path.basename(s.filePath)))).toEqual([]);
     expect(misfiled.every((s) => s.currentFolder === 'Photos' || s.currentFolder === 'Finance')).toBe(true);
   });
 });
