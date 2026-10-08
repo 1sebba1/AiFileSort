@@ -1,16 +1,11 @@
 import { ipcMain, dialog } from 'electron';
 import path from 'path';
 import os from 'os';
-import fsp from 'fs/promises';
 import { IpcChannels, EMBED_MODEL, OllamaHealth, PullProgress } from '@shared/types';
 import { OllamaClient } from './ollama/ollamaClient';
-import { scanDirectory } from './scanner/fileScanner';
-import { extractContent } from './extractor/contentExtractor';
-import { embedFiles } from './embedding/embeddingEngine';
-import { clusterFiles } from './clustering/clusteringEngine';
-import { reasonClusters, categorizeAtomicFolders } from './reasoning/llmReasoner';
 import { executeApproved, undoManifest } from './executor/fileExecutor';
-import { FileMeta, FileSuggestion } from '@shared/types';
+import { FileSuggestion } from '@shared/types';
+import { runPipeline } from './pipeline';
 import { BrowserWindow } from 'electron';
 
 const ollamaClient = new OllamaClient();
@@ -60,62 +55,15 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle(IpcChannels.SCAN_START, async (_, { rootPath, chatModel, k }: { rootPath: string; chatModel: string; k?: number }) => {
     scanAbortController = new AbortController();
-    const signal = scanAbortController.signal;
-
-    // Phase: scanning — detect atomic folders first, then walk remaining files
-    win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'scanning', current: 0, total: 0 });
-    const scan = await scanDirectory(rootPath, (count) => {
-      win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'scanning', current: count, total: count });
+    const suggestions = await runPipeline(rootPath, {
+      client: ollamaClient,
+      chatModel,
+      k,
+      signal: scanAbortController.signal,
+      emit: (progress) => win.webContents.send(IpcChannels.SCAN_PROGRESS, progress),
     });
-    const atomicFolders = scan.atomicFolders;
-    const files = scan.files.filter((f) => f.relativeFolder === '');
+    if (!suggestions) return;
 
-    if (signal.aborted) return;
-
-    // Phase: extracting
-    for (let i = 0; i < files.length; i++) {
-      if (signal.aborted) return;
-      files[i].contentSnippet = await extractContent(files[i]);
-      win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'extracting', current: i + 1, total: files.length });
-    }
-
-    // Phase: embedding
-    win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'embedding', current: 0, total: files.length });
-    const vectors = await embedFiles(files, ollamaClient, EMBED_MODEL, 32, (pct) => {
-      win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'embedding', current: pct, total: 100 });
-    }, signal);
-
-    if (signal.aborted) return;
-
-    // Phase: clustering
-    win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'clustering', current: 0, total: 1 });
-    const assignments = clusterFiles(vectors, k);
-
-    // Phase: reasoning
-    const fileMap = new Map<string, FileMeta>(files.map((f) => [f.absolutePath, f]));
-    let topLevelFolders: string[] = [];
-    try {
-      const rootEntries = await fsp.readdir(rootPath, { withFileTypes: true });
-      const SKIP = new Set(['.git', 'node_modules', '.svn', '.hg']);
-      topLevelFolders = rootEntries
-        .filter((e) => e.isDirectory() && !SKIP.has(e.name))
-        .map((e) => e.name);
-    } catch {
-      topLevelFolders = [];
-    }
-    win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'reasoning', current: 0, total: assignments.length });
-    const fileSuggestions = await reasonClusters(assignments, fileMap, topLevelFolders, ollamaClient, chatModel, (done, total) => {
-      win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'reasoning', current: done, total });
-    }, { rootPath, signal });
-
-    if (signal.aborted) return;
-
-    // Categorize atomic folders (shown separately — not destructured)
-    const atomicSuggestions = atomicFolders.length > 0
-      ? await categorizeAtomicFolders(atomicFolders, topLevelFolders, ollamaClient, chatModel, () => {}, { rootPath, signal })
-      : [];
-
-    const suggestions = [...atomicSuggestions, ...fileSuggestions];
     currentSuggestions = suggestions;
     win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'done', current: suggestions.length, total: suggestions.length });
     win.webContents.send(IpcChannels.SUGGESTIONS_UPDATE, suggestions);
