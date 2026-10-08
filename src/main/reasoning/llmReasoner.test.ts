@@ -1,4 +1,5 @@
-import { reasonClusters, categorizeAtomicFolders, sanitizeFolder, clampConfidence, buildContextSection } from './llmReasoner';
+import { reasonClusters, categorizeAtomicFolders, sanitizeFolder, clampConfidence, buildContextSection, confirmMisfits, parseMisfitResponse } from './llmReasoner';
+import { MisfitCandidate } from '../context/misfitDetector';
 import { FolderProfile } from '../context/folderProfiles';
 import { OllamaClient } from '../ollama/ollamaClient';
 import { ClusterAssignment, FileMeta } from '@shared/types';
@@ -260,5 +261,77 @@ describe('reasonClusters with context', () => {
     const client = { chat: jest.fn() } as unknown as OllamaClient;
     expect(await reasonClusters([], new Map(), ['A'], client, 'm', () => {})).toEqual([]);
     expect(client.chat).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseMisfitResponse', () => {
+  const alts = ['Finance/Receipts', 'Work (old)', 'Café'];
+  const json = (o: object) => JSON.stringify(o);
+
+  it('accepts a move to one of the alternatives, keeping its spelling', () => {
+    expect(parseMisfitResponse(json({ rationale: 'r', move: true, suggestedFolder: 'finance\\receipts/', confidence: 80 }), alts))
+      .toEqual({ folder: 'Finance/Receipts', confidence: 0.8, rationale: 'r' });
+  });
+
+  it('matches names with spaces, parentheses and accents', () => {
+    expect(parseMisfitResponse(json({ rationale: '', move: true, suggestedFolder: 'work (OLD)', confidence: 0.6 }), alts)?.folder).toBe('Work (old)');
+    expect(parseMisfitResponse(json({ rationale: '', move: true, suggestedFolder: 'café', confidence: 0.6 }), alts)?.folder).toBe('Café');
+  });
+
+  it.each([
+    ['move false', { rationale: 'fits', move: false, suggestedFolder: 'Café', confidence: 0.9 }],
+    ['move missing', { rationale: '', suggestedFolder: 'Café', confidence: 0.9 }],
+    ['folder not offered', { rationale: '', move: true, suggestedFolder: 'Photos', confidence: 0.9 }],
+  ])('drops %s', (_label, obj) => {
+    expect(parseMisfitResponse(json(obj), alts)).toBeNull();
+  });
+
+  it('drops malformed output', () => {
+    expect(parseMisfitResponse('not json', alts)).toBeNull();
+  });
+});
+
+describe('confirmMisfits', () => {
+  function candidate(name: string): MisfitCandidate {
+    const p = (path: string): FolderProfile => ({ path, fileCount: 5, topExtensions: [['.jpg', 5]], sampleNames: ['IMG_1.jpg'], centroid: [1], vectorSum: [5], embeddedCount: 5 });
+    return {
+      file: { ...makeMeta(`/root/Photos/${name}`), relativeFolder: 'Photos', contentSnippet: 'Invoice total £40', originHost: 'amazon.co.uk' },
+      current: p('Photos'),
+      alternatives: [p('Finance/Receipts'), p('Documents')],
+      margin: 0.3,
+    };
+  }
+
+  it('turns confirmed moves into misfiled suggestions and drops the rest', async () => {
+    const client = {
+      chat: jest.fn(async (_m: string, prompt: string) => prompt.includes('receipt_a.pdf')
+        ? JSON.stringify({ rationale: 'A receipt.', move: true, suggestedFolder: 'Finance/Receipts', confidence: 0.9 })
+        : JSON.stringify({ rationale: 'Fits.', move: false, suggestedFolder: '', confidence: 0.4 })),
+    } as unknown as OllamaClient;
+    const progress: number[] = [];
+    const result = await confirmMisfits([candidate('receipt_a.pdf'), candidate('holiday.jpg')], client, 'm', (d) => progress.push(d), { rootPath: '/root' });
+    expect(result).toEqual([{
+      filePath: '/root/Photos/receipt_a.pdf', clusterId: -1, suggestedDestination: 'Finance/Receipts',
+      rationale: 'A receipt.', confidence: 0.9, status: 'pending', kind: 'misfiled', currentFolder: 'Photos',
+    }]);
+    expect(progress).toEqual([1, 2]);
+  });
+
+  it('shows the model the file evidence, the current folder and only the alternatives', async () => {
+    const client = { chat: jest.fn().mockResolvedValue('{}') } as unknown as OllamaClient;
+    await confirmMisfits([candidate('receipt_a.pdf')], client, 'm', () => {}, { rootPath: '/root' });
+    const [, prompt, options] = (client.chat as jest.Mock).mock.calls[0];
+    expect(prompt).toContain('File: Photos/receipt_a.pdf');
+    expect(prompt).toContain('Invoice total £40');
+    expect(prompt).toContain('Known pattern: Receipt — Finance');
+    expect(prompt).toContain('Downloaded from: amazon.co.uk');
+    expect(prompt).toContain('It is currently in:\n  - Photos (5 files');
+    expect(prompt).toContain('exactly one of: "Finance/Receipts", "Documents"');
+    expect(options.format.required).toContain('move');
+  });
+
+  it('drops a candidate when the chat call fails', async () => {
+    const client = { chat: jest.fn().mockRejectedValue(new Error('down')) } as unknown as OllamaClient;
+    expect(await confirmMisfits([candidate('a.pdf')], client, 'm', () => {})).toEqual([]);
   });
 });

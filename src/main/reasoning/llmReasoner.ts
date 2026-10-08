@@ -4,7 +4,8 @@ import { OllamaClient, ChatOptions } from '../ollama/ollamaClient';
 import { evenSample } from '../context/sampling';
 import { FolderProfile, describeProfile, topFolders } from '../context/folderProfiles';
 import { meanDirection } from '../context/vectorMath';
-import { summarizeSignatures } from '../context/signatures';
+import { summarizeSignatures, matchSignature } from '../context/signatures';
+import { MisfitCandidate } from '../context/misfitDetector';
 import { summarizeOrigins } from '../context/fileOrigin';
 
 interface LlmClusterResult {
@@ -44,6 +45,20 @@ const RESPONSE_SCHEMA = {
 };
 
 const CHAT_OPTIONS: ChatOptions = { format: RESPONSE_SCHEMA, temperature: 0.2, numCtx: 4096 };
+
+const MISFIT_SCHEMA = {
+  type: 'object',
+  properties: {
+    rationale: { type: 'string' },
+    move: { type: 'boolean' },
+    suggestedFolder: { type: 'string' },
+    confidence: { type: 'number' },
+  },
+  required: ['rationale', 'move', 'suggestedFolder', 'confidence'],
+};
+
+const MISFIT_CHAT_OPTIONS: ChatOptions = { ...CHAT_OPTIONS, format: MISFIT_SCHEMA };
+const MISFIT_SNIPPET_CHARS = 300;
 
 const CATEGORY_HINTS = `
 Common category patterns (use these as guidance):
@@ -325,5 +340,98 @@ export async function reasonClusters(
       status: 'pending',
       kind: 'loose',
     };
+  });
+}
+
+function normalizeFolderAnswer(raw: unknown): string {
+  return typeof raw === 'string' ? raw.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase() : '';
+}
+
+/** Result of a misfit check, or null when the file should stay where it is */
+export function parseMisfitResponse(
+  raw: string,
+  alternatives: string[],
+): { folder: string; confidence: number; rationale: string } | null {
+  try {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+    if (parsed.move !== true) return null;
+    const wanted = normalizeFolderAnswer(parsed.suggestedFolder);
+    // Only folders we offered are acceptable — misfit fixes never invent new folders
+    const folder = alternatives.find((a) => a.toLowerCase() === wanted);
+    if (!folder) return null;
+    return {
+      folder,
+      confidence: clampConfidence(parsed.confidence),
+      rationale: typeof parsed.rationale === 'string' ? parsed.rationale.trim() : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildMisfitPrompt(c: MisfitCandidate, rootPath?: string): string {
+  const sig = matchSignature(c.file.name);
+  const evidence = [
+    `File: ${toDisplayPath(c.file.absolutePath, rootPath)}`,
+    c.file.contentSnippet ? `Content starts: ${c.file.contentSnippet.slice(0, MISFIT_SNIPPET_CHARS).replace(/\s+/g, ' ').trim()}` : null,
+    sig ? `Known pattern: ${sig.app} — ${sig.category}` : null,
+    c.file.originHost ? `Downloaded from: ${c.file.originHost}` : null,
+  ].filter(Boolean).join('\n');
+  const options = c.alternatives.map((p) => `"${p.path}"`).join(', ');
+
+  return `You are a file organisation assistant. The user has already organised their files into folders. This file may have been filed in the wrong folder.
+
+${evidence}
+
+It is currently in:
+  - ${describeProfile(c.current)}
+
+Alternative folders:
+${c.alternatives.map((p) => `  - ${describeProfile(p)}`).join('\n')}
+
+Decide whether the file clearly belongs in one of the alternative folders instead. People often file things deliberately — answer "move": true only when the evidence is clear. If you move it, suggestedFolder must be exactly one of: ${options}.
+
+Respond with JSON: {"rationale": "One sentence explanation.", "move": false, "suggestedFolder": "", "confidence": 0.5}`;
+}
+
+/** Stage 2 of misfit detection: the LLM confirms or rejects each embedding outlier */
+export async function confirmMisfits(
+  candidates: MisfitCandidate[],
+  client: OllamaClient,
+  model: string,
+  onProgress: (done: number, total: number) => void,
+  options: ReasonOptions = {},
+): Promise<FileSuggestion[]> {
+  const results = await mapWithConcurrency(
+    candidates,
+    options.concurrency ?? DEFAULT_CONCURRENCY,
+    async (c) => {
+      try {
+        const raw = await client.chat(model, buildMisfitPrompt(c, options.rootPath), MISFIT_CHAT_OPTIONS);
+        return parseMisfitResponse(raw, c.alternatives.map((p) => p.path));
+      } catch {
+        return null;
+      }
+    },
+    null,
+    (done) => onProgress(done, candidates.length),
+    options.signal,
+  );
+
+  return candidates.flatMap((c, i): FileSuggestion[] => {
+    const r = results[i];
+    if (!r) return [];
+    return [{
+      filePath: c.file.absolutePath,
+      clusterId: -1,
+      suggestedDestination: r.folder,
+      rationale: r.rationale,
+      confidence: r.confidence,
+      status: 'pending',
+      kind: 'misfiled',
+      currentFolder: c.file.relativeFolder,
+    }];
   });
 }
