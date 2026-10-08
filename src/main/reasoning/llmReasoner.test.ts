@@ -1,4 +1,4 @@
-import { reasonClusters, sanitizeFolder, clampConfidence, samplePaths } from './llmReasoner';
+import { reasonClusters, categorizeAtomicFolders, sanitizeFolder, clampConfidence, samplePaths } from './llmReasoner';
 import { OllamaClient } from '../ollama/ollamaClient';
 import { ClusterAssignment, FileMeta } from '@shared/types';
 
@@ -121,6 +121,27 @@ describe('reasonClusters prompts', () => {
     const fileMap = new Map(assignments.map((a) => [a.filePath, makeMeta(a.filePath)]));
     await reasonClusters(assignments, fileMap, [], client, 'm', () => {}, { concurrency: 1, signal: controller.signal });
     expect(client.chat).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('suggestion kinds', () => {
+  it('tags cluster suggestions as loose', async () => {
+    const client = { chat: jest.fn().mockResolvedValue(llmResponse) } as unknown as OllamaClient;
+    const result = await reasonClusters(
+      [{ filePath: '/root/a.txt', clusterId: 0 }],
+      new Map([['/root/a.txt', makeMeta('/root/a.txt')]]),
+      [], client, 'm', () => {},
+    );
+    expect(result[0].kind).toBe('loose');
+  });
+
+  it('tags atomic folder suggestions as folder', async () => {
+    const client = { chat: jest.fn().mockResolvedValue(llmResponse) } as unknown as OllamaClient;
+    const result = await categorizeAtomicFolders(
+      [{ absolutePath: '/root/Hades', name: 'Hades', fileCount: 30, hasExecutable: true }],
+      [], client, 'm', () => {},
+    );
+    expect(result[0].kind).toBe('folder');
   });
 });
 

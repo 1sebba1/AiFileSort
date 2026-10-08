@@ -12,6 +12,7 @@ const approved: FileSuggestion = {
   rationale: '',
   confidence: 0.9,
   status: 'approved',
+  kind: 'loose',
 };
 
 describe('executeApproved', () => {
@@ -62,5 +63,16 @@ describe('executeApproved', () => {
     expect(mockFsp.unlink).toHaveBeenCalledTimes(1);
     expect(result.moved).toHaveLength(1);
     expect(result.skipped).toHaveLength(0);
+  });
+
+  it('moves a folder suggestion as a whole directory on cross-drive moves', async () => {
+    mockFsp.rename = jest.fn().mockRejectedValue(Object.assign(new Error('EXDEV'), { code: 'EXDEV' }));
+    mockFsp.access = jest.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    mockFsp.cp = jest.fn().mockResolvedValue(undefined);
+    mockFsp.rm = jest.fn().mockResolvedValue(undefined);
+    const folder: FileSuggestion = { ...approved, filePath: '/root/Hades', kind: 'folder', suggestedDestination: 'Games' };
+    await executeApproved([folder], '/root', '/root/.undo.json');
+    expect(mockFsp.cp).toHaveBeenCalledWith('/root/Hades', expect.stringContaining('Hades'), { recursive: true });
+    expect(mockFsp.rm).toHaveBeenCalledWith('/root/Hades', { recursive: true, force: true });
   });
 });

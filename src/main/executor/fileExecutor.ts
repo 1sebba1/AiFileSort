@@ -55,7 +55,7 @@ export async function executeApproved(
         const dest = path.resolve(resolvedRoot, s.suggestedDestination, path.basename(s.filePath));
         // Reject LLM-suggested paths that escape the root
         if (!dest.startsWith(resolvedRoot + path.sep) && dest !== resolvedRoot) return null;
-        return { from: s.filePath, to: dest, completed: false, isFolder: s.isAtomicFolder };
+        return { from: s.filePath, to: dest, completed: false, isFolder: s.kind === 'folder' };
       })
       .filter((m): m is NonNullable<typeof m> => m !== null),
   };

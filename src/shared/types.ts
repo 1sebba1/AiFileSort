@@ -19,6 +19,9 @@ export interface ClusterAssignment {
   clusterId: number;
 }
 
+/** loose = unsorted file at the scan root; misfiled = filed file that looks out of place; folder = app/game/project moved as a unit */
+export type SuggestionKind = 'loose' | 'misfiled' | 'folder';
+
 export interface FileSuggestion {
   filePath: string;
   clusterId: number;
@@ -26,7 +29,9 @@ export interface FileSuggestion {
   rationale: string;
   confidence: number; // 0–1
   status: 'pending' | 'approved' | 'rejected';
-  isAtomicFolder?: boolean; // true = move entire directory as a unit
+  kind: SuggestionKind;
+  /** Folder the file is in now (relative to the scan root) — set for misfiled suggestions */
+  currentFolder?: string;
 }
 
 export interface AtomicFolder {
@@ -48,6 +53,7 @@ export type ScanPhase =
   | 'scanning'
   | 'extracting'
   | 'embedding'
+  | 'profiling'
   | 'clustering'
   | 'reasoning'
   | 'done';

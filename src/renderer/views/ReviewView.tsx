@@ -29,9 +29,9 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
     onSuggestionsChange(updated);
   }
 
-  const atomicFolders = suggestions.filter((s) => s.isAtomicFolder);
+  const atomicFolders = suggestions.filter((s) => s.kind === 'folder');
   const fileGroups = new Map<number, FileSuggestion[]>();
-  for (const s of suggestions.filter((s) => !s.isAtomicFolder)) {
+  for (const s of suggestions.filter((s) => s.kind === 'loose')) {
     const arr = fileGroups.get(s.clusterId) ?? [];
     arr.push(s);
     fileGroups.set(s.clusterId, arr);

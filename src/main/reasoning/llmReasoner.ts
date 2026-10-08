@@ -229,7 +229,7 @@ export async function categorizeAtomicFolders(
     rationale: results[i].rationale,
     confidence: results[i].confidence,
     status: 'pending',
-    isAtomicFolder: true,
+    kind: 'folder',
   }));
 }
 
@@ -274,6 +274,7 @@ export async function reasonClusters(
       rationale: cr.rationale,
       confidence: cr.confidence,
       status: 'pending',
+      kind: 'loose',
     };
   });
 }

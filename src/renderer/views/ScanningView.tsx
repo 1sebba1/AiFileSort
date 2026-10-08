@@ -16,6 +16,7 @@ const phaseLabel: Record<string, string> = {
   scanning: 'Scanning files…',
   extracting: 'Extracting content…',
   embedding: 'Generating embeddings…',
+  profiling: 'Learning how your folders are organised…',
   clustering: 'Clustering…',
   reasoning: 'Reasoning with AI…',
   done: 'Done',
