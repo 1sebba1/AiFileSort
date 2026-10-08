@@ -2,7 +2,7 @@ import os from 'os';
 import path from 'path';
 import fsp from 'fs/promises';
 import { OllamaClient } from './ollama/ollamaClient';
-import { runPipeline } from './pipeline';
+import { runPipeline, orderExistingFolders } from './pipeline';
 import { ScanProgress } from '@shared/types';
 
 let root: string;
@@ -103,5 +103,27 @@ describe('runPipeline', () => {
     const last = reasoning[reasoning.length - 1];
     expect(last.total).toBe(3); // 1 loose cluster + 1 atomic folder + 1 misfit candidate
     expect(last.current).toBe(3);
+  });
+
+  it('tells the atomic-folder prompt about folders that hold no files of their own', async () => {
+    await write('Games/Hades/Hades.exe');
+    await write('Games/Hades/fmod.dll');
+    await write('Celeste/Celeste.exe');
+    await write('Celeste/fmod.dll');
+    const client = fakeClient();
+    await run({ client }).promise;
+    const prompt: string = (client.chat as jest.Mock).mock.calls.find((c) => String(c[1]).includes('entire folder'))![1];
+    expect(prompt).toContain('  - Games');
+  });
+});
+
+describe('orderExistingFolders', () => {
+  it('orders by depth then name so top-level folders survive any cap', () => {
+    expect(orderExistingFolders(['Archive/2019/Jan', 'Music', 'Archive/2019', 'Archive', 'Videos', 'Archive/2018'], ['Work']))
+      .toEqual(['Archive', 'Music', 'Videos', 'Work', 'Archive/2018', 'Archive/2019', 'Archive/2019/Jan']);
+  });
+
+  it('removes duplicates', () => {
+    expect(orderExistingFolders(['Finance', 'Finance/Bank'], ['Finance/Bank'])).toEqual(['Finance', 'Finance/Bank']);
   });
 });

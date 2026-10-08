@@ -86,6 +86,11 @@ export interface ContextInput {
   originLine: string | null;
 }
 
+/** " (first N of M)" when a folder list was cut, so the model knows other folders exist */
+function truncationLabel(shown: number, total: number): string {
+  return shown < total ? ` (first ${shown} of ${total})` : '';
+}
+
 /** Evidence about the user's organisation for one prompt, shrunk until it fits the budget */
 export function buildContextSection(input: ContextInput, budget = CONTEXT_CHAR_BUDGET): string {
   const render = (withSamples: boolean, folderCap: number): string => {
@@ -94,7 +99,8 @@ export function buildContextSection(input: ContextInput, budget = CONTEXT_CHAR_B
       parts.push(`Most similar existing folders:\n${input.similar.map((p) => `  - ${describeProfile(p, withSamples)}`).join('\n')}`);
     }
     if (input.allFolders.length && folderCap > 0) {
-      parts.push(`All existing folders: ${input.allFolders.slice(0, folderCap).join(', ')}`);
+      const shown = input.allFolders.slice(0, folderCap);
+      parts.push(`All existing folders${truncationLabel(shown.length, input.allFolders.length)}: ${shown.join(', ')}`);
     }
     if (input.signatureLines.length) {
       parts.push(`Known patterns in this group:\n${input.signatureLines.map((l) => `  - ${l}`).join('\n')}`);
@@ -159,8 +165,10 @@ Respond with JSON: {"rationale": "One sentence explanation.", "suggestedFolder":
 }
 
 function buildAtomicPrompt(folder: AtomicFolder, existingFolders: string[], rootPath?: string): string {
+  const shown = existingFolders.slice(0, MAX_FOLDER_LIST);
+  const label = shown.length < existingFolders.length ? `; first ${shown.length} of ${existingFolders.length}` : '';
   const folderList = existingFolders.length
-    ? `Existing folders (STRONGLY prefer these):\n${existingFolders.slice(0, MAX_FOLDER_LIST).map((f) => `  - ${f}`).join('\n')}`
+    ? `Existing folders (STRONGLY prefer these${label}):\n${shown.map((f) => `  - ${f}`).join('\n')}`
     : 'No existing folders yet.';
   const hints = [
     folder.hasExecutable ? 'contains executables (likely software or a game)' : null,

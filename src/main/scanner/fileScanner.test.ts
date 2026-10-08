@@ -103,6 +103,21 @@ describe('scanDirectory', () => {
 
   it('returns nothing for a missing root', async () => {
     const result = await scanDirectory(path.join(root, 'nope'), () => {});
-    expect(result).toEqual({ files: [], atomicFolders: [] });
+    expect(result).toEqual({ files: [], atomicFolders: [], folders: [] });
+  });
+
+  it('lists every walkable folder at depth 1-3, including empty ones and ones holding only an installed game', async () => {
+    await makeTree([
+      'Empty/',
+      'Games/Hades/Hades.exe', 'Games/Hades/fmod.dll',
+      'Finance/Bank/statement.pdf',
+      'a/b/c/d/deep.txt',
+      'Tool/tool.exe', 'Tool/lib.dll',
+      '.hidden/x.txt',
+      'node_modules/pkg/index.js',
+      'loose.txt',
+    ]);
+    const { folders } = await scanDirectory(root, () => {});
+    expect([...folders].sort()).toEqual(['Empty', 'Finance', 'Finance/Bank', 'Games', 'a', 'a/b', 'a/b/c']);
   });
 });

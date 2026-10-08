@@ -148,6 +148,30 @@ describe('suggestion kinds', () => {
   });
 });
 
+describe('atomic prompt folder list', () => {
+  it('labels a truncated folder list with how many were shown', async () => {
+    const client = { chat: jest.fn().mockResolvedValue(llmResponse) } as unknown as OllamaClient;
+    const existing = Array.from({ length: 75 }, (_, i) => `F${i}`);
+    await categorizeAtomicFolders(
+      [{ absolutePath: '/root/Hades', name: 'Hades', fileCount: 30, hasExecutable: true }],
+      existing, client, 'm', () => {},
+    );
+    const prompt: string = (client.chat as jest.Mock).mock.calls[0][1];
+    expect(prompt).toContain('Existing folders (STRONGLY prefer these; first 60 of 75):');
+    expect(prompt).toContain('  - F59');
+    expect(prompt).not.toContain('  - F60');
+  });
+
+  it('does not label a complete folder list', async () => {
+    const client = { chat: jest.fn().mockResolvedValue(llmResponse) } as unknown as OllamaClient;
+    await categorizeAtomicFolders(
+      [{ absolutePath: '/root/Hades', name: 'Hades', fileCount: 30, hasExecutable: true }],
+      ['Games'], client, 'm', () => {},
+    );
+    expect((client.chat as jest.Mock).mock.calls[0][1]).toContain('Existing folders (STRONGLY prefer these):\n  - Games');
+  });
+});
+
 describe('sanitizeFolder', () => {
   it.each([
     ['Documents/Work', 'Documents/Work'],
@@ -208,6 +232,13 @@ describe('buildContextSection', () => {
   it('omits empty sections', () => {
     const text = buildContextSection({ similar: [], allFolders: ['Docs'], signatureLines: [], originLine: null });
     expect(text).toBe('All existing folders: Docs');
+  });
+
+  it('labels a truncated folder list with how many were shown', () => {
+    const allFolders = Array.from({ length: 143 }, (_, i) => `F${i}`);
+    const text = buildContextSection({ similar: [], allFolders, signatureLines: [], originLine: null });
+    expect(text.startsWith('All existing folders (first 60 of 143): F0, F1,')).toBe(true);
+    expect(text).not.toContain('F60');
   });
 
   it('stays within budget with very long folder and file names', () => {

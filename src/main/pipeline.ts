@@ -20,12 +20,23 @@ export interface PipelineOptions {
   emit: (progress: ScanProgress) => void;
 }
 
+/**
+ * Existing folders for the prompts: every scanned folder (plus any profiled one), deduplicated and
+ * ordered shallowest first, then by name — so a list cap drops deep subfolders, never top-level ones.
+ */
+export function orderExistingFolders(scannedFolders: string[], profiledFolders: string[] = []): string[] {
+  const depth = (f: string): number => f.split('/').length;
+  return Array.from(new Set([...scannedFolders, ...profiledFolders])).sort(
+    (a, b) => depth(a) - depth(b) || (a < b ? -1 : a > b ? 1 : 0),
+  );
+}
+
 /** Runs scan → extract → embed → profile → cluster → reason. Returns null if cancelled. */
 export async function runPipeline(rootPath: string, opts: PipelineOptions): Promise<FileSuggestion[] | null> {
   const { client, chatModel, k, signal, emit } = opts;
 
   emit({ phase: 'scanning', current: 0, total: 0 });
-  const { files: scanned, atomicFolders } = await scanDirectory(rootPath, (count) => {
+  const { files: scanned, atomicFolders, folders: scannedFolders } = await scanDirectory(rootPath, (count) => {
     emit({ phase: 'scanning', current: count, total: count });
   });
   if (signal.aborted) return null;
@@ -49,7 +60,7 @@ export async function runPipeline(rootPath: string, opts: PipelineOptions): Prom
   emit({ phase: 'profiling', current: 0, total: 1 });
   const profiles = buildFolderProfiles(scanned, vectors);
   const candidates = findMisfitCandidates(files, vectors, profiles);
-  const existingFolders = profiles.map((p) => p.path);
+  const existingFolders = orderExistingFolders(scannedFolders, profiles.map((p) => p.path));
   emit({ phase: 'profiling', current: 1, total: 1 });
 
   emit({ phase: 'clustering', current: 0, total: 1 });

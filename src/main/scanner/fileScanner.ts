@@ -16,11 +16,18 @@ const APP_SUPPORT_EXTS = ['.dll', '.pak', '.asar', '.so', '.dylib'];
 const BINARY_DIR_NAMES = new Set(['bin', 'x64', 'x86', 'win64', 'win32', 'binaries', 'app', 'program']);
 const PROJECT_MARKERS = new Set(['.git', 'package.json']);
 const ATOMIC_FILE_COUNT_CAP = 30;
+/** Folders deeper than this are not listed as existing destinations (matches profile depth) */
+const MAX_LISTED_FOLDER_DEPTH = 3;
 
 export interface ScanResult {
   files: FileMeta[];
   /** Top-level atomic folders only — nested ones sit inside the user's organisation and are left alone */
   atomicFolders: AtomicFolder[];
+  /**
+   * Every walkable (non-skipped, non-hidden, non-atomic) folder at depth 1-3, relative to the root
+   * with '/' separators — including folders with no files of their own (empty, or holding only apps)
+   */
+  folders: string[];
 }
 
 type ReadDir = (dir: string) => Promise<Dirent[]>;
@@ -80,6 +87,7 @@ export async function scanDirectory(
   const readdir = cachedReaddir();
   const files: FileMeta[] = [];
   const atomicFolders: AtomicFolder[] = [];
+  const folders: string[] = [];
 
   const walk = async (dir: string, relativeFolder: string): Promise<void> => {
     for (const entry of await readdir(dir)) {
@@ -100,7 +108,9 @@ export async function scanDirectory(
           }
           continue;
         }
-        await walk(fullPath, relativeFolder ? `${relativeFolder}/${entry.name}` : entry.name);
+        const childFolder = relativeFolder ? `${relativeFolder}/${entry.name}` : entry.name;
+        if (childFolder.split('/').length <= MAX_LISTED_FOLDER_DEPTH) folders.push(childFolder);
+        await walk(fullPath, childFolder);
       } else if (entry.isFile()) {
         try {
           const stat = await fsp.stat(fullPath);
@@ -124,7 +134,7 @@ export async function scanDirectory(
   };
 
   await walk(rootPath, '');
-  return { files, atomicFolders };
+  return { files, atomicFolders, folders };
 }
 
 function extToMime(ext: string): string {
