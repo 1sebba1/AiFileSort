@@ -99,9 +99,27 @@ export const IpcChannels = {
   OLLAMA_PULL_PROGRESS: 'ollama:pullProgress',
   FILE_REVEAL: 'file:reveal',
   FILE_TRASH: 'file:trash',
+  SESSION_LOAD: 'session:load',
 } as const;
 
 export const EMBED_MODEL = 'nomic-embed-text';
+
+/** The last completed scan, kept on disk until the user rescans */
+export interface SavedScan {
+  rootPath: string;
+  chatModel: string;
+  k?: number;
+  /** ISO timestamp of when the scan finished */
+  scannedAt: string;
+  suggestions: FileSuggestion[];
+}
+
+export interface ExecuteResult {
+  moved: string[];
+  skipped: string[];
+  /** Suggestions still to review after the moves (moved items removed) */
+  remaining: FileSuggestion[];
+}
 
 export interface OllamaHealth {
   healthy: boolean;

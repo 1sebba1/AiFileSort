@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { FileSuggestion } from '@shared/types';
+import { ExecuteResult, FileSuggestion } from '@shared/types';
 import { AppConfig } from '../App';
 import { useIpc } from '../hooks/useIpc';
 import ProgressBar from '../components/ProgressBar';
@@ -7,17 +7,19 @@ import ProgressBar from '../components/ProgressBar';
 interface Props {
   suggestions: FileSuggestion[];
   config: AppConfig;
-  onComplete: (result: { moved: string[]; skipped: string[] }) => void;
-  result?: { moved: string[]; skipped: string[] };
+  onComplete: (result: ExecuteResult) => void;
+  result?: ExecuteResult;
   onGoHome?: () => void;
+  /** Shown when unmoved suggestions remain from the same scan */
+  onContinueReview?: () => void;
 }
 
-export default function ExecutingView({ suggestions, config, onComplete, result, onGoHome }: Props): React.JSX.Element {
+export default function ExecutingView({ suggestions, config, onComplete, result, onGoHome, onContinueReview }: Props): React.JSX.Element {
   const { invoke, on, off, IpcChannels } = useIpc();
 
   useEffect(() => {
     if (result) return;
-    const handleComplete = (r: unknown) => onComplete(r as { moved: string[]; skipped: string[] });
+    const handleComplete = (r: unknown) => onComplete(r as ExecuteResult);
     const handleUndo = () => onGoHome?.();
     on(IpcChannels.EXECUTE_COMPLETE, handleComplete);
     on(IpcChannels.UNDO_COMPLETE, handleUndo);
@@ -54,6 +56,14 @@ export default function ExecutingView({ suggestions, config, onComplete, result,
         >
           Undo all moves
         </button>
+        {onContinueReview && (
+          <button
+            onClick={onContinueReview}
+            style={{ padding: '8px 16px', border: '1px solid #e5e7eb', borderRadius: 6, cursor: 'pointer' }}
+          >
+            Continue reviewing ({result.remaining.length} left)
+          </button>
+        )}
         <button
           onClick={onGoHome}
           style={{ padding: '8px 20px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}

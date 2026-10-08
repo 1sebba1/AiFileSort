@@ -1,21 +1,49 @@
-import { ipcMain, dialog, shell } from 'electron';
+import { app, ipcMain, dialog, shell } from 'electron';
 import path from 'path';
 import os from 'os';
-import { IpcChannels, EMBED_MODEL, OllamaHealth, PullProgress } from '@shared/types';
+import { IpcChannels, EMBED_MODEL, ExecuteResult, OllamaHealth, PullProgress, SavedScan } from '@shared/types';
 import { OllamaClient } from './ollama/ollamaClient';
 import { executeApproved, undoManifest } from './executor/fileExecutor';
 import { FileSuggestion } from '@shared/types';
 import { runPipeline } from './pipeline';
 import { findSuggestion, trashSuggestion } from './fileActions';
+import { createScanStore, withoutMoved } from './scanStore';
 import { BrowserWindow } from 'electron';
 
 const ollamaClient = new OllamaClient();
 let scanAbortController: AbortController | null = null;
 let currentSuggestions: FileSuggestion[] = [];
+// Everything about the current scan except its suggestions; null until a scan is loaded or finished
+let scanMeta: Omit<SavedScan, 'suggestions'> | null = null;
 const activePulls = new Map<string, Promise<void>>();
 const MANIFEST_PATH = path.join(os.tmpdir(), 'aifilesort-undo.json');
 
 export function registerIpcHandlers(win: BrowserWindow): void {
+  const scanStore = createScanStore(path.join(app.getPath('userData'), 'last-scan.json'));
+
+  // Called after every change so a reload or restart comes back to exactly this state
+  async function persistScan(): Promise<void> {
+    if (!scanMeta) return;
+    try {
+      if (currentSuggestions.length > 0) await scanStore.save({ ...scanMeta, suggestions: currentSuggestions });
+      else await scanStore.clear();
+    } catch (err) {
+      console.error('Could not save scan results', err);
+    }
+  }
+
+  ipcMain.handle(IpcChannels.SESSION_LOAD, async (): Promise<SavedScan | null> => {
+    // A renderer reload keeps the main process alive, so prefer what is already in memory
+    if (!scanMeta) {
+      const saved = await scanStore.load();
+      if (!saved) return null;
+      const { suggestions, ...meta } = saved;
+      scanMeta = meta;
+      currentSuggestions = suggestions;
+    }
+    return currentSuggestions.length > 0 ? { ...scanMeta, suggestions: currentSuggestions } : null;
+  });
+
   ipcMain.handle(IpcChannels.SELECT_FOLDER, async () => {
     const result = await dialog.showOpenDialog(win, {
       properties: ['openDirectory'],
@@ -66,6 +94,8 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     if (!suggestions) return;
 
     currentSuggestions = suggestions;
+    scanMeta = { rootPath, chatModel, k, scannedAt: new Date().toISOString() };
+    await persistScan();
     win.webContents.send(IpcChannels.SCAN_PROGRESS, { phase: 'done', current: suggestions.length, total: suggestions.length });
     win.webContents.send(IpcChannels.SUGGESTIONS_UPDATE, suggestions);
   });
@@ -74,9 +104,10 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     scanAbortController?.abort();
   });
 
-  ipcMain.handle(IpcChannels.SUGGESTION_SET_STATUS, (_, { filePath, status }: { filePath: string; status: FileSuggestion['status'] }) => {
+  ipcMain.handle(IpcChannels.SUGGESTION_SET_STATUS, async (_, { filePath, status }: { filePath: string; status: FileSuggestion['status'] }) => {
     const s = currentSuggestions.find((s) => s.filePath === filePath);
     if (s) s.status = status;
+    await persistScan();
     return currentSuggestions;
   });
 
@@ -105,12 +136,16 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       dialog.showErrorBox('Could not delete', `${path.basename(filePath)}: ${result.error}`);
     }
     currentSuggestions = result.suggestions;
+    await persistScan();
     return currentSuggestions;
   });
 
   ipcMain.handle(IpcChannels.EXECUTE_START, async (_, { rootPath }: { rootPath: string }) => {
     const { moved, skipped } = await executeApproved(currentSuggestions, rootPath, MANIFEST_PATH);
-    win.webContents.send(IpcChannels.EXECUTE_COMPLETE, { moved, skipped });
+    currentSuggestions = withoutMoved(currentSuggestions, moved);
+    await persistScan();
+    const result: ExecuteResult = { moved, skipped, remaining: currentSuggestions };
+    win.webContents.send(IpcChannels.EXECUTE_COMPLETE, result);
   });
 
   ipcMain.handle(IpcChannels.UNDO_START, async () => {

@@ -8,11 +8,13 @@ interface Props {
   config: AppConfig;
   onConfigChange: (c: AppConfig) => void;
   onStart: () => void;
+  /** Present when a saved scan can be resumed */
+  onContinue?: () => void;
 }
 
 const OLLAMA_POLL_MS = 5000;
 
-export default function HomeView({ config, onConfigChange, onStart }: Props): React.JSX.Element {
+export default function HomeView({ config, onConfigChange, onStart, onContinue }: Props): React.JSX.Element {
   const { invoke, on, off, IpcChannels } = useIpc();
   const [health, setHealth] = useState<OllamaHealth | null>(null);
   const [pulling, setPulling] = useState(false);
@@ -96,6 +98,14 @@ export default function HomeView({ config, onConfigChange, onStart }: Props): Re
   return (
     <div style={{ padding: 32, maxWidth: 600 }}>
       <h1>AiFileSort</h1>
+      {onContinue && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, marginBottom: 16, background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 8 }}>
+          <span style={{ flex: 1 }}>You have results from your last scan.</span>
+          <button onClick={onContinue} style={{ padding: '6px 14px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}>
+            Continue reviewing
+          </button>
+        </div>
+      )}
       <div>
         <span>Folder to sort:</span>
         <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>

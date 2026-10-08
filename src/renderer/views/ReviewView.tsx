@@ -4,11 +4,14 @@ import { useIpc } from '../hooks/useIpc';
 import ClusterGroup from '../components/ClusterGroup';
 import FileActionButtons from '../components/FileActionButtons';
 import { looseClusterMembers } from './reviewSelection';
+import { ScanInfo } from '../App';
 
 interface Props {
   suggestions: FileSuggestion[];
+  scanInfo: ScanInfo | null;
   onSuggestionsChange: (s: FileSuggestion[]) => void;
   onExecute: () => void;
+  onRescan: () => void;
   onBack: () => void;
 }
 
@@ -29,7 +32,7 @@ const sectionHeading: React.CSSProperties = {
   margin: '0 0 12px', color: '#374151', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1,
 };
 
-export default function ReviewView({ suggestions, onSuggestionsChange, onExecute, onBack }: Props): React.JSX.Element {
+export default function ReviewView({ suggestions, scanInfo, onSuggestionsChange, onExecute, onRescan, onBack }: Props): React.JSX.Element {
   const { invoke, IpcChannels } = useIpc();
 
   function setStatus(filePath: string, status: FileSuggestion['status']): void {
@@ -87,6 +90,17 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
           Move {approvedCount} items
         </button>
       </div>
+
+      {scanInfo && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '-12px 0 24px', color: '#6b7280', fontSize: 13 }}>
+          <span>
+            Scan of <code>{scanInfo.rootPath}</code> · {new Date(scanInfo.scannedAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+          </span>
+          <button onClick={onRescan} style={{ padding: '2px 10px', border: '1px solid #d1d5db', borderRadius: 4, background: '#fff', cursor: 'pointer' }}>
+            Rescan
+          </button>
+        </div>
+      )}
 
       {atomicFolders.length > 0 && (
         <div style={{ marginBottom: 32 }}>
