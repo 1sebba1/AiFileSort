@@ -10,6 +10,23 @@ interface Props {
   onBack: () => void;
 }
 
+function DecisionButtons({ status, onChange }: { status: FileSuggestion['status']; onChange: (s: FileSuggestion['status']) => void }): React.JSX.Element {
+  const style = (active: boolean, color: string): React.CSSProperties => ({
+    padding: '4px 12px', borderRadius: 4, border: 'none', cursor: 'pointer',
+    background: active ? color : '#e5e7eb', color: active ? '#fff' : '#374151',
+  });
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <button onClick={() => onChange('approved')} style={style(status === 'approved', '#6366f1')}>Approve</button>
+      <button onClick={() => onChange('rejected')} style={style(status === 'rejected', '#ef4444')}>Reject</button>
+    </div>
+  );
+}
+
+const sectionHeading: React.CSSProperties = {
+  margin: '0 0 12px', color: '#374151', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1,
+};
+
 export default function ReviewView({ suggestions, onSuggestionsChange, onExecute, onBack }: Props): React.JSX.Element {
   const { invoke, IpcChannels } = useIpc();
 
@@ -37,6 +54,8 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
     fileGroups.set(s.clusterId, arr);
   }
 
+  const misfiled = suggestions.filter((s) => s.kind === 'misfiled');
+
   const approvedCount = suggestions.filter((s) => s.status === 'approved').length;
   const totalCount = suggestions.length;
 
@@ -58,7 +77,7 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
 
       {atomicFolders.length > 0 && (
         <div style={{ marginBottom: 32 }}>
-          <h3 style={{ margin: '0 0 12px', color: '#374151', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1 }}>
+          <h3 style={sectionHeading}>
             Folders (moved as a unit)
           </h3>
           {atomicFolders.map((s) => (
@@ -72,20 +91,7 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
                   → {s.suggestedDestination} &nbsp;·&nbsp; {s.rationale}
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  onClick={() => setStatus(s.filePath, 'approved')}
-                  style={{ padding: '4px 12px', borderRadius: 4, border: 'none', cursor: 'pointer', background: s.status === 'approved' ? '#6366f1' : '#e5e7eb', color: s.status === 'approved' ? '#fff' : '#374151' }}
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={() => setStatus(s.filePath, 'rejected')}
-                  style={{ padding: '4px 12px', borderRadius: 4, border: 'none', cursor: 'pointer', background: s.status === 'rejected' ? '#ef4444' : '#e5e7eb', color: s.status === 'rejected' ? '#fff' : '#374151' }}
-                >
-                  Reject
-                </button>
-              </div>
+              <DecisionButtons status={s.status} onChange={(status) => setStatus(s.filePath, status)} />
             </div>
           ))}
         </div>
@@ -103,6 +109,28 @@ export default function ReviewView({ suggestions, onSuggestionsChange, onExecute
           onRejectAll={() => { void setAllInCluster(clusterId, 'rejected'); }}
         />
       ))}
+
+      {misfiled.length > 0 && (
+        <div style={{ marginTop: 32 }}>
+          <h3 style={sectionHeading}>Possibly misfiled</h3>
+          <p style={{ margin: '0 0 12px', color: '#6b7280', fontSize: 13 }}>
+            These files are already in a folder but look like they belong elsewhere. Review each one — nothing moves unless you approve it.
+          </p>
+          {misfiled.map((s) => (
+            <div key={s.filePath} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', marginBottom: 8, border: '1px solid #fde68a', borderRadius: 8, background: '#fffbeb' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {s.filePath.split(/[\\/]/).pop()}
+                </div>
+                <div style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>
+                  {s.currentFolder} → <strong>{s.suggestedDestination}</strong> &nbsp;·&nbsp; {Math.round(s.confidence * 100)}% &nbsp;·&nbsp; {s.rationale}
+                </div>
+              </div>
+              <DecisionButtons status={s.status} onChange={(status) => setStatus(s.filePath, status)} />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
