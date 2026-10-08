@@ -1,6 +1,7 @@
 import path from 'path';
 import { ClusterAssignment, FileMeta, FileSuggestion, AtomicFolder } from '@shared/types';
 import { OllamaClient, ChatOptions } from '../ollama/ollamaClient';
+import { evenSample } from '../context/sampling';
 
 interface LlmClusterResult {
   suggestedFolder: string;
@@ -55,13 +56,6 @@ function toDisplayPath(filePath: string, rootPath?: string): string {
   return rel.replace(/\\/g, '/');
 }
 
-/** Evenly spaced sample so a large cluster is represented end to end, not just its first files */
-export function samplePaths(paths: string[], max: number): string[] {
-  if (paths.length <= max) return paths;
-  const step = paths.length / max;
-  return Array.from({ length: max }, (_, i) => paths[Math.floor(i * step)]);
-}
-
 function summarizeExtensions(files: FileMeta[]): string {
   const counts = new Map<string, number>();
   for (const f of files) {
@@ -80,7 +74,7 @@ function buildPrompt(displayPaths: string[], metas: FileMeta[], existingFolders:
     ? `Existing folders (STRONGLY prefer these over creating new ones):\n${existingFolders.map((f) => `  - ${f}`).join('\n')}`
     : 'No existing folders yet — you may create one.';
 
-  const shown = samplePaths(displayPaths, MAX_PATHS_IN_PROMPT);
+  const shown = evenSample(displayPaths, MAX_PATHS_IN_PROMPT);
   const sizeLine = shown.length < displayPaths.length
     ? `This group has ${displayPaths.length} files; a representative sample of ${shown.length} is shown.`
     : `This group has ${displayPaths.length} files.`;

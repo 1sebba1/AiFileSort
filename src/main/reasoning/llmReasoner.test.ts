@@ -1,4 +1,4 @@
-import { reasonClusters, categorizeAtomicFolders, sanitizeFolder, clampConfidence, samplePaths } from './llmReasoner';
+import { reasonClusters, categorizeAtomicFolders, sanitizeFolder, clampConfidence } from './llmReasoner';
 import { OllamaClient } from '../ollama/ollamaClient';
 import { ClusterAssignment, FileMeta } from '@shared/types';
 
@@ -182,16 +182,5 @@ describe('clampConfidence', () => {
     [undefined, 0],
   ])('%p → %p', (raw, expected) => {
     expect(clampConfidence(raw)).toBeCloseTo(expected);
-  });
-});
-
-describe('samplePaths', () => {
-  it('returns all paths when under the limit', () => {
-    expect(samplePaths(['a', 'b'], 5)).toEqual(['a', 'b']);
-  });
-  it('spreads the sample across the whole list', () => {
-    const paths = Array.from({ length: 100 }, (_, i) => String(i));
-    const sample = samplePaths(paths, 4);
-    expect(sample).toEqual(['0', '25', '50', '75']);
   });
 });
